@@ -1121,8 +1121,7 @@ void HexEditWnd::InitGotoDlg(HWND hDlg) {
 		CheckDlgButton(hDlg, IDC_FO, BST_UNCHECKED);
 	}
 
-	if (!diData.pDataBuff || diData.qwSize < sizeof(IMAGE_DOS_HEADER) ||
-		!file_type((char *)diData.pDataBuff)) {
+	if (!IsPEFile()) {
 		EnableWindow(GetDlgItem(hDlg, IDC_VA), FALSE);
 	}
 	return;

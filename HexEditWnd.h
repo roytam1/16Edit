@@ -269,6 +269,11 @@ public:
 	void          ConfigureTBCCP();
 	void          ConfigureTB();
 
+typedef struct _HE_EDIT_CELL {
+	ULONGLONG   qwOff;
+	BYTE        byVal;
+} HE_EDIT_CELL;
+
 private:
 	UINT			   timerId;
 	EditOperList	   *operList;
@@ -277,9 +282,16 @@ private:
 	BOOL			   bSavePointValid;
 	ULONGLONG		   qwOldSize;
 	HINSTANCE          hInst;
-	HE_DATA_INFO       diData;        // working buffer
+	HE_DATA_INFO       diData;        // working buffer (malloc mode)
 	HE_DATA_INFO       diOrgData;     // buffer with current file content
 	CFile              fInput;
+	CPagedFile         pagedFile;     // file-backed reader (large-file mode)
+	BOOL               bPagedMode;    // TRUE when diData.pDataBuff is NULL
+	HE_EDIT_CELL       *pEditCells;   // sorted overlay of modified bytes (paged mode)
+	SIZE_T             nEditCells;
+	SIZE_T             capEditCells;
+	BYTE               *pHeadCache;   // first 64KB for PE/VA translation (paged mode)
+	SIZE_T             cbHeadCache;
 	UINT               uFontHeight, uFontWidth, uMaxLines;
 	HE_STATUS          stat;
 	HE_SEARCHOPTIONS   search;
@@ -336,6 +348,9 @@ private:
 	BOOL          SetCurrentLine(ULONGLONG qwLine);
 	BOOL          ValidateLine(LONGLONG *pllLine);
 	BOOL          Search(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset);
+	BOOL          SearchPaged(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset);
+	BOOL          IsPEFile();
+	BOOL          IsPagedMode();
 	BOOL          PerformStrReplace(PHE_SEARCHOPTIONS pso);
 	BOOL          PerformStrReplaceAll(PHE_SEARCHOPTIONS pso);
 	BOOL          PerformStrSearch(PHE_SEARCHOPTIONS pso);
@@ -357,6 +372,19 @@ private:
 	void          SetCaretSelInfoToStatus();
 	BOOL					IsClipboardFormatOK();
 	PHE_CLIPBOARD_DATA   	GetClipboardData();
+	// Paged large-file mode (32-bit >2GB): unified read path with overlay.
+	BYTE            GetByteAt(ULONGLONG qwOff);
+	BOOL            ReadBytesAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb);
+	BOOL            PagedOverlayGet(ULONGLONG qwOff, BYTE *pby);
+	void            PagedOverlaySet(ULONGLONG qwOff, BYTE byVal);
+	void            PagedOverlayRemove(ULONGLONG qwOff);
+	void            PagedOverlayClear();
+	BYTE            PagedRawByte(ULONGLONG qwOff);
+	void            ClosePaged();
+	BOOL            OpenPaged(const char *szPath, BOOL bRO);
+	BOOL            SavePaged();
+	BOOL            PagedApplyModify(HE_OPER *op);
+	void            PagedUndoModify(HE_OPER *op);
 
 };
 

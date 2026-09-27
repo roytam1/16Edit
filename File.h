@@ -68,4 +68,37 @@ private:
 	char          cFilePath[MAX_PATH];
 };
 
+//
+// CPagedFile - file-backed sliding-window reader for files too large
+// to fit in one contiguous malloc (32-bit builds editing >2GB files).
+// Keeps a single mapped view (64MB) and remaps on demand; falls back
+// to ReadFile when mapping is unavailable. Read-only; edits are kept
+// in a separate overlay by the caller.
+//
+class CPagedFile
+{
+public:
+	CPagedFile();
+	~CPagedFile();
+	BOOL          Open(const char *szFilePath, BOOL bReadOnly);
+	void          Close();
+	BOOL          IsOpen();
+	ULONGLONG     GetSize();
+	BOOL          ReadAt(ULONGLONG qwOff, void *pBuf, SIZE_T cb);
+	BOOL          GetByteAt(ULONGLONG qwOff, BYTE *pby);
+
+private:
+	BOOL          EnsureView(ULONGLONG qwOff);
+
+	HANDLE        hFile;
+	HANDLE        hMap;
+	ULONGLONG     qwSize;
+	BYTE          *pView;
+	ULONGLONG     qwViewOff;
+	SIZE_T        cbView;
+	DWORD         dwGran;
+	BOOL          bReadOnly;
+	char          cPath[MAX_PATH];
+};
+
 #endif

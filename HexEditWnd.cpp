@@ -104,6 +104,9 @@ HexEditWnd::HexEditWnd() {
 
 	timerId			  = 0;
 	hMainWnd          = 0;
+	hTB               = 0;
+	hStatusBar        = 0;
+	hClient           = 0;
 	bHEOnTop          = 0;
 	bFileOffset		  = TRUE;
 	bResizingAllowed  = FALSE;
@@ -111,8 +114,23 @@ HexEditWnd::HexEditWnd() {
 	bSaveWinPos       = FALSE;
 	bInsert			  = FALSE;
 	uMaxLines         = DEF_MAX_LINES;
+	uFontHeight       = 0;
+	uFontWidth        = 0;
 	operList		  = NULL;
 	current			  = NULL;
+	savepoint		  = NULL;
+	bSavePointValid	  = TRUE;
+	qwOldSize         = 0;
+	diData.pDataBuff  = NULL;
+	diData.qwSize     = 0;
+	diOrgData.pDataBuff = NULL;
+	diOrgData.qwSize  = 0;
+	bPagedMode        = FALSE;
+	pEditCells        = NULL;
+	nEditCells        = 0;
+	capEditCells      = 0;
+	pHeadCache        = NULL;
+	cbHeadCache       = 0;
 
 	InitEdition();
 	ZERO(search);
@@ -151,6 +169,7 @@ HexEditWnd::HexEditWnd() {
 }
 
 HexEditWnd::~HexEditWnd() {
+	ClosePaged();
 	DeleteObject(hFont);
 	DeleteObject(hFontU);
 
@@ -171,6 +190,7 @@ void HexEditWnd::InitEdition() {
 	savepoint		  = operList;
 	bSavePointValid	  = TRUE;
 	diData.qwSize     = 0;
+	ClosePaged();
 
 	return;
 }
@@ -179,6 +199,7 @@ void HexEditWnd::QuitEdition() {
 	free(diData.pDataBuff);
 	diData.pDataBuff = NULL;
 	diData.qwSize = 0;
+	ClosePaged();
 	if (search.bInited) {
 		if (search.pData)
 			free(search.pData);
@@ -285,8 +306,10 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 
 BOOL HexEditWnd::DoEditFile(char* szFilePath, BOOL bForceReadOnly) {
 	BOOL          bRet;
+	BOOL          bRO;
 
 	fInput.Destroy();
+	ClosePaged();
 
 	if (bForceReadOnly)
 		bRet = fInput.GetFileHandle(szFilePath, F_OPENEXISTING_R);
@@ -295,22 +318,42 @@ BOOL HexEditWnd::DoEditFile(char* szFilePath, BOOL bForceReadOnly) {
 	if (!bRet)
 		return FALSE;
 
-	if (!fInput.MapFile())
+	bRO = fInput.IsFileReadOnly();
+
+	if (fInput.MapFile())
+	{
+		diOrgData.bReadOnly  = bRO;
+		diOrgData.qwSize     = fInput.GetFSize();
+		diOrgData.pDataBuff  = (BYTE*)fInput.GetMapPtr();
+		qwOldSize = diOrgData.qwSize;
+
+		diData = diOrgData;
+		fInput.SetMapPtrSize(NULL, 0);
+		fInput.Destroy();
+
+		if (IsPEFile()) {
+			bFileOffset = FALSE;
+		}
+
+		SetHEWndCaption();
+		return TRUE;
+	}
+
+	// malloc failed (e.g. >2GB file on 32-bit): fall back to file-backed
+	// paging so viewing + in-place byte edits still work.
+	fInput.Destroy();
+	if (!OpenPaged(szFilePath, bRO))
 		return FALSE;
 
-	diOrgData.bReadOnly  = fInput.IsFileReadOnly();
-	diOrgData.qwSize     = fInput.GetFSize();
-	diOrgData.pDataBuff  = (BYTE*)fInput.GetMapPtr();
+	diOrgData.bReadOnly  = bRO;
+	diOrgData.qwSize     = pagedFile.GetSize();
+	diOrgData.pDataBuff  = NULL;
 	qwOldSize = diOrgData.qwSize;
 
 	diData = diOrgData;
-	fInput.SetMapPtrSize(NULL, 0);
-	fInput.Destroy();
 
-	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER)) {
-		if (file_type((char *)diData.pDataBuff)) {
-			bFileOffset = FALSE;
-		}
+	if (IsPEFile()) {
+		bFileOffset = FALSE;
 	}
 
 	SetHEWndCaption();
@@ -320,6 +363,14 @@ BOOL HexEditWnd::DoEditFile(char* szFilePath, BOOL bForceReadOnly) {
 ULONGLONG HexEditWnd::GetFileOffset(ULONGLONG qwVirtualAddress) {
 	ULONGLONG	qwOffset;
 
+	if (bPagedMode)
+	{
+		if (IsPEFile() && pHeadCache)
+			qwOffset = get_fo((char *)pHeadCache, qwVirtualAddress);
+		else
+			qwOffset = qwVirtualAddress;
+		return qwOffset;
+	}
 	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
 		file_type((char *)diData.pDataBuff)) {
 		qwOffset = get_fo((char *)diData.pDataBuff, qwVirtualAddress);
@@ -332,6 +383,14 @@ ULONGLONG HexEditWnd::GetFileOffset(ULONGLONG qwVirtualAddress) {
 ULONGLONG HexEditWnd::GetVirtualAddress(ULONGLONG qwFileOffset) {
 	ULONGLONG	qwOffset;
 
+	if (bPagedMode)
+	{
+		if (IsPEFile() && pHeadCache)
+			qwOffset = get_va((char *)pHeadCache, qwFileOffset);
+		else
+			qwOffset = qwFileOffset;
+		return qwOffset;
+	}
 	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
 		file_type((char *)diData.pDataBuff)) {
 		qwOffset = get_va((char *)diData.pDataBuff, qwFileOffset);
@@ -378,6 +437,391 @@ UINT HexEditWnd::GetCharsX() {
 	if (GetOffsetDigits() > 8)
 		uChars += 8 * uFontWidth;
 	return uChars;
+}
+
+BOOL HexEditWnd::IsPagedMode() {
+	return bPagedMode;
+}
+
+BOOL HexEditWnd::IsPEFile() {
+	const BYTE *pBase;
+	ULONGLONG cbAvail;
+	IMAGE_DOS_HEADER *pDos;
+	IMAGE_NT_HEADERS *pNT;
+	ULONGLONG qwHead, qwNeed;
+
+	if (bPagedMode)
+	{
+		pBase = pHeadCache;
+		cbAvail = (ULONGLONG)cbHeadCache;
+	}
+	else
+	{
+		pBase = diData.pDataBuff;
+		cbAvail = diData.qwSize;
+	}
+	if (!pBase || cbAvail < sizeof(IMAGE_DOS_HEADER))
+		return FALSE;
+	if (!file_type((char*)pBase))
+		return FALSE;
+	// Bound the section table so get_va/get_fo can't run off the
+	// cached header (paged) or buffer (malloc) on malformed files.
+	pDos = (IMAGE_DOS_HEADER*)pBase;
+	if ((DWORD)pDos->e_lfanew >= cbAvail)
+		return FALSE;
+	pNT = (IMAGE_NT_HEADERS*)(pBase + pDos->e_lfanew);
+	qwHead = (ULONGLONG)pDos->e_lfanew + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER);
+	if (qwHead >= cbAvail)
+		return FALSE;
+	qwNeed = qwHead + pNT->FileHeader.SizeOfOptionalHeader +
+		(ULONGLONG)pNT->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+	if (pNT->FileHeader.NumberOfSections == 0 ||
+		pNT->FileHeader.NumberOfSections > 96 ||
+		qwNeed > cbAvail)
+		return FALSE;
+	return TRUE;
+}
+
+void HexEditWnd::ClosePaged() {
+	pagedFile.Close();
+	bPagedMode = FALSE;
+	PagedOverlayClear();
+	if (pHeadCache)
+	{
+		free(pHeadCache);
+		pHeadCache = NULL;
+	}
+	cbHeadCache = 0;
+}
+
+#define PAGED_HEAD_CACHE (65536UL)
+
+BOOL HexEditWnd::OpenPaged(const char *szPath, BOOL bRO) {
+	SIZE_T cbWant;
+
+	ClosePaged();
+
+	if (!pagedFile.Open(szPath, bRO))
+		return FALSE;
+	if (pagedFile.GetSize() == 0)
+	{
+		// Empty file: nothing to page; caller sets size 0.
+		bPagedMode = TRUE;
+		return TRUE;
+	}
+
+	cbWant = (SIZE_T)PAGED_HEAD_CACHE;
+	if ((ULONGLONG)cbWant > pagedFile.GetSize())
+		cbWant = (SIZE_T)pagedFile.GetSize();
+	pHeadCache = (BYTE*)malloc(cbWant);
+	if (!pHeadCache)
+	{
+		pagedFile.Close();
+		return FALSE;
+	}
+	if (!pagedFile.ReadAt(0, pHeadCache, cbWant))
+	{
+		free(pHeadCache);
+		pHeadCache = NULL;
+		pagedFile.Close();
+		return FALSE;
+	}
+	cbHeadCache = cbWant;
+	bPagedMode = TRUE;
+	return TRUE;
+}
+
+BYTE HexEditWnd::PagedRawByte(ULONGLONG qwOff) {
+	BYTE by = 0;
+	pagedFile.GetByteAt(qwOff, &by);
+	return by;
+}
+
+BOOL HexEditWnd::PagedOverlayGet(ULONGLONG qwOff, BYTE *pby) {
+	SIZE_T lo, hi, mid;
+
+	if (!pby || nEditCells == 0)
+		return FALSE;
+	lo = 0;
+	hi = nEditCells;
+	while (lo < hi)
+	{
+		mid = lo + (hi - lo) / 2;
+		if (pEditCells[mid].qwOff < qwOff)
+			lo = mid + 1;
+		else if (pEditCells[mid].qwOff > qwOff)
+			hi = mid;
+		else
+		{
+			*pby = pEditCells[mid].byVal;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+void HexEditWnd::PagedOverlaySet(ULONGLONG qwOff, BYTE byVal) {
+	SIZE_T lo, hi, mid, pos;
+	BYTE byOld;
+
+	if (PagedOverlayGet(qwOff, &byOld))
+	{
+		if (byOld == byVal)
+			return;
+		// update in place: find again (cheap, edits are rare vs reads)
+		lo = 0;
+		hi = nEditCells;
+		while (lo < hi)
+		{
+			mid = lo + (hi - lo) / 2;
+			if (pEditCells[mid].qwOff < qwOff)
+				lo = mid + 1;
+			else if (pEditCells[mid].qwOff > qwOff)
+				hi = mid;
+			else
+			{
+				pEditCells[mid].byVal = byVal;
+				break;
+			}
+		}
+		if (pHeadCache && (ULONGLONG)qwOff < (ULONGLONG)cbHeadCache)
+			pHeadCache[(SIZE_T)qwOff] = byVal;
+		return;
+	}
+
+	if (nEditCells >= capEditCells)
+	{
+		SIZE_T capNew = (capEditCells == 0) ? 256 : capEditCells * 2;
+		HE_EDIT_CELL *pNew = (HE_EDIT_CELL*)realloc(pEditCells, capNew * sizeof(HE_EDIT_CELL));
+		if (!pNew)
+			return; // out of memory: drop edit (caller still records undo; read falls back to file)
+		pEditCells = pNew;
+		capEditCells = capNew;
+	}
+
+	pos = 0;
+	lo = 0;
+	hi = nEditCells;
+	while (lo < hi)
+	{
+		mid = lo + (hi - lo) / 2;
+		if (pEditCells[mid].qwOff < qwOff)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	pos = lo;
+	if (pos < nEditCells)
+		memmove(&pEditCells[pos + 1], &pEditCells[pos], (nEditCells - pos) * sizeof(HE_EDIT_CELL));
+	pEditCells[pos].qwOff = qwOff;
+	pEditCells[pos].byVal = byVal;
+	nEditCells++;
+	if (pHeadCache && (ULONGLONG)qwOff < (ULONGLONG)cbHeadCache)
+		pHeadCache[(SIZE_T)qwOff] = byVal;
+}
+
+void HexEditWnd::PagedOverlayRemove(ULONGLONG qwOff) {
+	SIZE_T lo, hi, mid;
+
+	if (nEditCells == 0)
+		return;
+	lo = 0;
+	hi = nEditCells;
+	while (lo < hi)
+	{
+		mid = lo + (hi - lo) / 2;
+		if (pEditCells[mid].qwOff < qwOff)
+			lo = mid + 1;
+		else if (pEditCells[mid].qwOff > qwOff)
+			hi = mid;
+		else
+		{
+			if (mid + 1 < nEditCells)
+				memmove(&pEditCells[mid], &pEditCells[mid + 1], (nEditCells - mid - 1) * sizeof(HE_EDIT_CELL));
+			nEditCells--;
+			break;
+		}
+	}
+}
+
+void HexEditWnd::PagedOverlayClear() {
+	if (pEditCells)
+	{
+		free(pEditCells);
+		pEditCells = NULL;
+	}
+	nEditCells = 0;
+	capEditCells = 0;
+}
+
+BYTE HexEditWnd::GetByteAt(ULONGLONG qwOff) {
+	BYTE by;
+
+	if (!bPagedMode)
+	{
+		if (diData.pDataBuff && qwOff < diData.qwSize)
+			return *(diData.pDataBuff + qwOff);
+		return 0;
+	}
+	if (PagedOverlayGet(qwOff, &by))
+		return by;
+	return PagedRawByte(qwOff);
+}
+
+BOOL HexEditWnd::ReadBytesAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb) {
+	SIZE_T i;
+
+	if (pBuf == NULL)
+		return FALSE;
+	if (cb == 0)
+		return TRUE;
+	if (qwOff + (ULONGLONG)cb > diData.qwSize)
+		return FALSE;
+
+	if (!bPagedMode)
+	{
+		if (!diData.pDataBuff)
+			return FALSE;
+		memcpy(pBuf, diData.pDataBuff + qwOff, cb);
+		return TRUE;
+	}
+
+	if (nEditCells == 0)
+		return pagedFile.ReadAt(qwOff, pBuf, cb);
+
+	// Slow path with overlay: chunk reads then patch.
+	// Chunk to keep single ReadAt calls small on 32-bit.
+	while (cb > 0)
+	{
+		SIZE_T cbStep = (cb > 1048576UL) ? (SIZE_T)1048576UL : cb;
+		if (!pagedFile.ReadAt(qwOff, pBuf, cbStep))
+			return FALSE;
+		for (i = 0; i < cbStep; i++)
+		{
+			BYTE byOver;
+			if (PagedOverlayGet(qwOff + (ULONGLONG)i, &byOver))
+				pBuf[i] = byOver;
+		}
+		pBuf += cbStep;
+		qwOff += (ULONGLONG)cbStep;
+		cb -= cbStep;
+	}
+	return TRUE;
+}
+
+BOOL HexEditWnd::PagedApplyModify(HE_OPER *op) {
+	BYTE byNew = op->newData[0];
+	PagedOverlaySet(op->qwOffset, byNew);
+	if (pHeadCache && op->qwOffset < (ULONGLONG)cbHeadCache)
+		pHeadCache[(SIZE_T)op->qwOffset] = byNew;
+	return TRUE;
+}
+
+void HexEditWnd::PagedUndoModify(HE_OPER *op) {
+	BYTE byOld = op->oldData[0];
+	BYTE byFile = PagedRawByte(op->qwOffset);
+	if (byOld == byFile)
+		PagedOverlayRemove(op->qwOffset);
+	else
+		PagedOverlaySet(op->qwOffset, byOld);
+	if (pHeadCache && op->qwOffset < (ULONGLONG)cbHeadCache)
+		pHeadCache[(SIZE_T)op->qwOffset] = PagedOverlayGet(op->qwOffset, &byOld) ? byOld : byFile;
+}
+
+#define PAGED_SAVE_CHUNK (4194304UL)
+#define PAGED_PASTE_LIMIT (16777216UL)
+
+BOOL HexEditWnd::SavePaged() {
+	char szTmpPath[MAX_PATH];
+	char szTmpFile[MAX_PATH];
+	CFile fTmp;
+	BYTE *pBuf;
+	ULONGLONG qwOff, qwLeft;
+	BOOL bROrig;
+
+	if (!bPagedMode || !pagedFile.IsOpen())
+		return FALSE;
+
+	bROrig = diOrgData.bReadOnly || bReadOnly;
+	if (bROrig)
+		return FALSE;
+
+	pBuf = (BYTE*)malloc((SIZE_T)PAGED_SAVE_CHUNK);
+	if (!pBuf)
+	{
+		ErrMsg(STR_NO_MEM);
+		return FALSE;
+	}
+
+	if (!GetTempPath(sizeof(szTmpPath), szTmpPath))
+	{
+		lstrcpy(szTmpPath, cInitialDir);
+	}
+	if (!GetTempFileName(szTmpPath, "16E", 0, szTmpFile))
+	{
+		free(pBuf);
+		return FALSE;
+	}
+
+	if (!fTmp.GetFileHandle(szTmpFile, F_CREATENEW))
+	{
+		free(pBuf);
+		DeleteFile(szTmpFile);
+		return FALSE;
+	}
+
+	qwOff = 0;
+	qwLeft = diData.qwSize;
+	while (qwLeft > 0)
+	{
+		SIZE_T cbStep = (qwLeft > (ULONGLONG)PAGED_SAVE_CHUNK) ? (SIZE_T)PAGED_SAVE_CHUNK : (SIZE_T)qwLeft;
+		if (!ReadBytesAt(qwOff, pBuf, cbStep))
+		{
+			free(pBuf);
+			fTmp.Destroy();
+			DeleteFile(szTmpFile);
+			return FALSE;
+		}
+		if (!fTmp.Write(pBuf, (ULONGLONG)cbStep))
+		{
+			free(pBuf);
+			fTmp.Destroy();
+			DeleteFile(szTmpFile);
+			return FALSE;
+		}
+		qwOff += (ULONGLONG)cbStep;
+		qwLeft -= (ULONGLONG)cbStep;
+	}
+	free(pBuf);
+	pBuf = NULL;
+	fTmp.Destroy();
+
+	// Replace original: pager holds open handles, so close first.
+	{
+		char szOrig[MAX_PATH];
+		lstrcpy(szOrig, fInput.GetFilePath());
+		if (szOrig[0] == '\0')
+		{
+			DeleteFile(szTmpFile);
+			return FALSE;
+		}
+		ClosePaged();
+		if (!MoveFileEx(szTmpFile, szOrig, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+		{
+			// Reopen original so the edition is not lost; edits stay in overlay+undo.
+			DeleteFile(szTmpFile);
+			return FALSE;
+		}
+		if (!OpenPaged(szOrig, FALSE))
+			return FALSE;
+		diData.pDataBuff = NULL;
+		diData.qwSize = pagedFile.GetSize();
+		diOrgData.pDataBuff = NULL;
+		diOrgData.qwSize = diData.qwSize;
+		qwOldSize = diData.qwSize;
+		PagedOverlayClear();
+	}
+	return TRUE;
 }
 
 BOOL HexEditWnd::PaintText(HWND hWnd) {
@@ -449,11 +893,11 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 			//
 			// change at this position?
 			//
-			byCur = *(diData.pDataBuff + qwOffset);
+			byCur = GetByteAt(qwOffset);
 
 			// next byte may be multibyte
 			if (qwOffset + 1 < diData.qwSize) {
-				byNext = *(diData.pDataBuff + qwOffset + 1);
+				byNext = GetByteAt(qwOffset + 1);
 			} else {
 				byNext = 0;
 			}
@@ -1692,7 +2136,7 @@ LRESULT HexEditWnd::HEHandleWM_CHAR(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 	hiWord = stat.posCaret.bHiword;
 
 	// process HE change
-	byOld = *(diData.pDataBuff + stat.posCaret.qwOffset);
+	byOld = GetByteAt(stat.posCaret.qwOffset);
 	if (stat.posCaret.bTextSection) {
 		byNew = (BYTE)wParam;
 	} else {
@@ -1788,8 +2232,7 @@ void HexEditWnd::ConfigureTB() {
 	SendMessage(hTB, TB_CHANGEBITMAP, TB_INSERT, bEnabled ? 22 : 23);
 
 	// offset type button
-	if (!diData.pDataBuff || diData.qwSize < sizeof(IMAGE_DOS_HEADER) ||
-		!file_type((char *)diData.pDataBuff)) {
+	if (!IsPEFile()) {
 		SendMessage(hTB, TB_CHANGEBITMAP, TB_OFFSET, 29);
 		SendMessage(hTB, TB_SETSTATE, TB_OFFSET, FALSE);
 	} else {
@@ -1900,6 +2343,19 @@ BOOL HexEditWnd::SaveChanges() {
 
 	SetStatusInfo("Saving...");
 	RepaintClientAreaNow();
+
+	if (bPagedMode) {
+		if (SavePaged()) {
+			savepoint = current;
+			bSavePointValid = TRUE;
+			SetStatusInfo("Save OK!");
+			return TRUE;
+		} else {
+			MessageBox(hMainWnd, "Unable to save file", "16Edit", MB_OK | MB_ICONWARNING);
+			SetStatusInfo("Save Failed!");
+			return FALSE;
+		}
+	}
 
 	if (fInput.OpenFileForSave()) {
 		fInput.SetMapPtrSize(diData.pDataBuff, diData.qwSize);
@@ -2169,6 +2625,9 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset) {
 	BYTE*   pby;
 	BOOL    bFound;
 
+	if (bPagedMode)
+		return SearchPaged(pso, pOffset);
+
 	if (!pso->bInited)
 		return FALSE;
 
@@ -2302,6 +2761,132 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset) {
 	return bFound;
 }
 
+#define PAGED_SEARCH_BLOCK (1048576UL)
+
+// Block search for paged large-file mode: stream 1MB blocks with
+// pattern-length overlap so matches straddling block edges are found.
+// Reads go through ReadBytesAt, hence see overlay (unsaved) edits.
+BOOL HexEditWnd::SearchPaged(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset) {
+	BYTE *pBlk;
+	SIZE_T cbBlk, cbPat;
+	ULONGLONG qwStart, qwEnd, qwBlkOff, qwLimit;
+	ULONGLONG i, qwFound;
+	BOOL bFound = FALSE;
+
+	if (!pso->bInited || !bPagedMode)
+		return FALSE;
+	if (pso->qwStr == 0 || pso->qwStr > diData.qwSize)
+		return FALSE;
+	if (pso->qwStr > (ULONGLONG)0x7FFFFFFFUL)
+		return FALSE;
+	cbPat = (SIZE_T)pso->qwStr;
+
+	pBlk = (BYTE*)malloc((SIZE_T)PAGED_SEARCH_BLOCK + cbPat);
+	if (!pBlk)
+		return FALSE;
+	cbBlk = (SIZE_T)PAGED_SEARCH_BLOCK;
+
+	qwStart = pso->qwStartOff;
+	if (qwStart >= diData.qwSize)
+		qwStart = diData.qwSize - 1;
+	if (!pso->bDown && diData.qwSize - qwStart < (ULONGLONG)cbPat)
+	{
+		if (diData.qwSize < (ULONGLONG)cbPat)
+		{
+			free(pBlk);
+			return FALSE;
+		}
+		qwStart = diData.qwSize - (ULONGLONG)cbPat;
+	}
+
+	if (pso->bDown)
+	{
+		qwBlkOff = qwStart;
+		while (qwBlkOff + (ULONGLONG)cbPat <= diData.qwSize)
+		{
+			ULONGLONG qwWant = (ULONGLONG)cbBlk + (ULONGLONG)cbPat - 1;
+			if (qwBlkOff + qwWant > diData.qwSize)
+				qwWant = diData.qwSize - qwBlkOff;
+			if (qwWant < (ULONGLONG)cbPat)
+				break;
+			if (!ReadBytesAt(qwBlkOff, pBlk, (SIZE_T)qwWant))
+				break;
+			qwLimit = qwWant - (ULONGLONG)cbPat;
+			for (i = 0; i <= qwLimit; i++)
+			{
+				BOOL bHit;
+				if (pso->bASCIIStr && !pso->bCaseSensitive)
+					bHit = (strnicmp((PCSTR)pso->pData, (PCSTR)(pBlk + (SIZE_T)i), cbPat) == 0);
+				else if (pso->bWideCharStr && !pso->bCaseSensitive)
+					bHit = (wcsnicmp((LPWSTR)pso->pData, (LPWSTR)(pBlk + (SIZE_T)i), cbPat / 2) == 0);
+				else
+					bHit = (memcmp(pso->pData, pBlk + (SIZE_T)i, cbPat) == 0);
+				if (bHit)
+				{
+					qwFound = qwBlkOff + i;
+					bFound = TRUE;
+					break;
+				}
+			}
+			if (bFound)
+			{
+				if (pOffset)
+					*pOffset = qwFound;
+				break;
+			}
+			if (qwBlkOff + (ULONGLONG)cbBlk + (ULONGLONG)cbPat > diData.qwSize)
+				break;
+			qwBlkOff += (ULONGLONG)cbBlk;
+			if (qwBlkOff >= diData.qwSize)
+				break;
+		}
+	}
+	else
+	{
+		// Up search: walk blocks from qwStart downward.
+		qwEnd = qwStart + (ULONGLONG)cbPat; // one past last candidate start
+		if (qwEnd > diData.qwSize)
+			qwEnd = diData.qwSize;
+		while (qwEnd >= (ULONGLONG)cbPat)
+		{
+			ULONGLONG qwBlkStart = (qwEnd > (ULONGLONG)cbBlk + (ULONGLONG)cbPat) ?
+				qwEnd - (ULONGLONG)cbBlk - (ULONGLONG)cbPat + 1 : 0;
+			ULONGLONG qwWant = qwEnd - qwBlkStart;
+			if (!ReadBytesAt(qwBlkStart, pBlk, (SIZE_T)qwWant))
+				break;
+			qwLimit = qwWant - (ULONGLONG)cbPat;
+			for (i = qwLimit + 1; i > 0; i--)
+			{
+				ULONGLONG k = i - 1;
+				BOOL bHit;
+				if (pso->bASCIIStr && !pso->bCaseSensitive)
+					bHit = (strnicmp((PCSTR)pso->pData, (PCSTR)(pBlk + (SIZE_T)k), cbPat) == 0);
+				else if (pso->bWideCharStr && !pso->bCaseSensitive)
+					bHit = (wcsnicmp((LPWSTR)pso->pData, (LPWSTR)(pBlk + (SIZE_T)k), cbPat / 2) == 0);
+				else
+					bHit = (memcmp(pso->pData, pBlk + (SIZE_T)k, cbPat) == 0);
+				if (bHit)
+				{
+					if (pOffset)
+						*pOffset = qwBlkStart + k;
+					bFound = TRUE;
+					break;
+				}
+			}
+			if (bFound)
+				break;
+			if (qwBlkStart == 0)
+				break;
+			qwEnd = qwBlkStart + (ULONGLONG)cbPat - 1;
+			if (qwEnd < (ULONGLONG)cbPat)
+				break;
+		}
+	}
+
+	free(pBlk);
+	return bFound;
+}
+
 //
 // searchs the stuff in the HE_SEARCHOPTIONS structure and setups the GUI
 //
@@ -2390,8 +2975,22 @@ BOOL HexEditWnd::PerformStrReplace(PHE_SEARCHOPTIONS pso) {
 
 	bFound = Search(pso, &qwCurOff);
 	if (bFound) {
+		if (bPagedMode && pso->qwStr > (ULONGLONG)PAGED_PASTE_LIMIT) {
+			SetStatusInfo("Match too large to replace in large-file mode!");
+			RepaintClientArea();
+			return FALSE;
+		}
 		HE_OPER *op = new HE_OPER(op_paste, qwCurOff, pso->qwStr, pso->qwReplaceStr);
-		memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
+		if (bPagedMode)
+		{
+			if (!ReadBytesAt(qwCurOff, op->oldData, (SIZE_T)pso->qwStr))
+			{
+				delete op;
+				return FALSE;
+			}
+		}
+		else
+			memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
 		if (pso->qwReplaceStr > 0) {
 			memcpy(op->newData, pso->pReplaceData, (SIZE_T)pso->qwReplaceStr);
 		}
@@ -2430,8 +3029,27 @@ BOOL HexEditWnd::PerformStrReplaceAll(PHE_SEARCHOPTIONS pso) {
 			break;
 		}
 		count++;
+		if (bPagedMode && pso->qwStr > (ULONGLONG)PAGED_PASTE_LIMIT) {
+			SetStatusInfo("Match too large to replace in large-file mode!");
+			ConfigureTB();
+			SetupVScrollbar();
+			RepaintClientArea();
+			return FALSE;
+		}
 		HE_OPER *op = new HE_OPER(op_paste, qwCurOff, pso->qwStr, pso->qwReplaceStr);
-		memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
+		if (bPagedMode)
+		{
+			if (!ReadBytesAt(qwCurOff, op->oldData, (SIZE_T)pso->qwStr))
+			{
+				delete op;
+				ConfigureTB();
+				SetupVScrollbar();
+				RepaintClientArea();
+				return FALSE;
+			}
+		}
+		else
+			memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
 		if (pso->qwReplaceStr > 0) {
 			memcpy(op->newData, pso->pReplaceData, (SIZE_T)pso->qwReplaceStr);
 		}
@@ -2480,7 +3098,13 @@ BOOL HexEditWnd::CopySelectedBlockAsText() {
 	}
 
 	pMem = GlobalLock(hMem);
-	memcpy(pMem, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwCount);
+	if (!ReadBytesAt(stat.qwOffSelStart, (BYTE*)pMem, (SIZE_T)qwCount)) {
+		GlobalUnlock(hMem);
+		GlobalFree(hMem);
+		CloseClipboard();
+		ErrMsg("Couldn't copy data to clipboard!");
+		return FALSE;
+	}
 	((char *)pMem)[(SIZE_T)qwCount] = 0;
 	GlobalUnlock(hMem);
 
@@ -2524,7 +3148,13 @@ BOOL HexEditWnd::CopySelectedBlock()
 		return FALSE;
 	}
 	pMem = GlobalLock(hMem);
-	memcpy(pMem, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwCount);
+	if (!ReadBytesAt(stat.qwOffSelStart, (BYTE*)pMem, (SIZE_T)qwCount)) {
+		GlobalUnlock(hMem);
+		GlobalFree(hMem);
+		CloseClipboard();
+		ErrMsg("Couldn't copy data to clipboard!");
+		return FALSE;
+	}
 	((char *)pMem)[(SIZE_T)qwCount] = 0;
 	GlobalUnlock(hMem);
 
@@ -2544,10 +3174,13 @@ BOOL HexEditWnd::CopySelectedBlock()
 	}
 	pMem = GlobalLock(hMem);
 	pcbd = (PHE_CLIPBOARD_DATA)pMem;
-	memcpy(
-		  &pcbd->byDataStart,
-		  diData.pDataBuff + stat.qwOffSelStart,
-		  (SIZE_T)qwCount);
+	if (!ReadBytesAt(stat.qwOffSelStart, &pcbd->byDataStart, (SIZE_T)qwCount)) {
+		GlobalUnlock(hMem);
+		GlobalFree(hMem);
+		CloseClipboard();
+		ErrMsg("Couldn't copy data to clipboard!");
+		return FALSE;
+	}
 	pcbd->qwDataSize = qwCount;
 	GlobalUnlock(hMem);
 
@@ -2564,6 +3197,10 @@ BOOL HexEditWnd::CopySelectedBlock()
 }
 
 BOOL HexEditWnd::DeleteSelectedBlock() {
+	if (bPagedMode) {
+		ErrMsg("Delete is not supported in large-file mode (32-bit paging prototype).");
+		return FALSE;
+	}
 	if (!CanCut()) return FALSE;
 
 	ULONGLONG qwSelLen = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
@@ -2628,8 +3265,40 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 		qwOffset = stat.posCaret.qwOffset;
 	}
 
+	if (bPagedMode && qwOldLen != pcbd->qwDataSize) {
+		ErrMsg("Insert/paste that changes size is not supported in large-file mode (32-bit paging prototype).");
+		free(pcbd);
+		return FALSE;
+	}
+	if (bPagedMode && qwOldLen > (ULONGLONG)PAGED_PASTE_LIMIT) {
+		ErrMsg("Block is too large to paste in large-file mode (32-bit paging prototype).");
+		free(pcbd);
+		return FALSE;
+	}
+
 	if (qwOldLen == pcbd->qwDataSize) {
-		if (!memcmp(diData.pDataBuff + qwOffset, &pcbd->byDataStart, (SIZE_T)qwOldLen)) {
+		BOOL bSame;
+		if (bPagedMode)
+		{
+			BYTE *pOld = (BYTE*)malloc((SIZE_T)qwOldLen ? (SIZE_T)qwOldLen : 1);
+			if (!pOld)
+			{
+				free(pcbd);
+				ErrMsg(STR_NO_MEM);
+				return FALSE;
+			}
+			if (!ReadBytesAt(qwOffset, pOld, (SIZE_T)qwOldLen))
+			{
+				free(pOld);
+				free(pcbd);
+				return FALSE;
+			}
+			bSame = (memcmp(pOld, &pcbd->byDataStart, (SIZE_T)qwOldLen) == 0);
+			free(pOld);
+		}
+		else
+			bSame = (memcmp(diData.pDataBuff + qwOffset, &pcbd->byDataStart, (SIZE_T)qwOldLen) == 0);
+		if (bSame) {
 			if (pcbd) {
 				free(pcbd);
 			}
@@ -2639,7 +3308,17 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 
 	HE_OPER *op = new HE_OPER(op_paste, qwOffset, qwOldLen, pcbd->qwDataSize);
 	if (qwOldLen > 0) {
-		memcpy(op->oldData, diData.pDataBuff + qwOffset, (SIZE_T)qwOldLen);
+		if (bPagedMode)
+		{
+			if (!ReadBytesAt(qwOffset, op->oldData, (SIZE_T)qwOldLen))
+			{
+				delete op;
+				free(pcbd);
+				return FALSE;
+			}
+		}
+		else
+			memcpy(op->oldData, diData.pDataBuff + qwOffset, (SIZE_T)qwOldLen);
 	}
 
 	memcpy(op->newData, &pcbd->byDataStart, (SIZE_T)pcbd->qwDataSize);
@@ -2749,6 +3428,25 @@ void HexEditWnd::ApplyOper(HE_OPER *op) {
 	memcpy(&posNew, &stat.posCaret, sizeof(HE_POS));
 	posNew.qwOffset = op->qwOffset;
 	posNew.bHiword      = TRUE;
+	if (bPagedMode)
+	{
+		if (op->type == op_modify)
+		{
+			PagedApplyModify(op);
+		}
+		else if (op->type == op_paste && op->qwNewLen == op->qwOldLen)
+		{
+			ULONGLONG i;
+			for (i = 0; i < op->qwNewLen; i++)
+				PagedOverlaySet(op->qwOffset + i, op->newData[(SIZE_T)i]);
+		}
+		else
+		{
+			ErrMsg("Operation is not supported in large-file mode (32-bit paging prototype).");
+		}
+		SetCaret(&posNew);
+		return;
+	}
 	switch (op->type) {
 		case op_modify:
 			((BYTE *)(diData.pDataBuff))[op->qwOffset] = op->newData[0];
@@ -2820,6 +3518,38 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 	memcpy(&posNew, &stat.posCaret, sizeof(HE_POS));
 	posNew.qwOffset = op->qwOffset;
 	posNew.bHiword      = TRUE;
+	if (bPagedMode)
+	{
+		if (op->type == op_modify)
+		{
+			PagedUndoModify(op);
+		}
+		else if (op->type == op_paste && op->qwNewLen == op->qwOldLen)
+		{
+			ULONGLONG i;
+			for (i = 0; i < op->qwOldLen; i++)
+			{
+				BYTE byFile = PagedRawByte(op->qwOffset + i);
+				BYTE byOld = op->oldData[(SIZE_T)i];
+				if (byOld == byFile)
+					PagedOverlayRemove(op->qwOffset + i);
+				else
+					PagedOverlaySet(op->qwOffset + i, byOld);
+				if (pHeadCache && op->qwOffset + i < (ULONGLONG)cbHeadCache)
+				{
+					BYTE byCur;
+					pHeadCache[(SIZE_T)(op->qwOffset + i)] =
+						PagedOverlayGet(op->qwOffset + i, &byCur) ? byCur : byFile;
+				}
+			}
+		}
+		else if (op->type == op_cut)
+		{
+			SetSelection(op->qwOffset, op->qwOffset + op->qwOldLen - 1);
+		}
+		SetCaret(&posNew);
+		return;
+	}
 	switch (op->type) {
 		case op_modify:
 			((BYTE *)(diData.pDataBuff))[op->qwOffset] = op->oldData[0];
@@ -2913,6 +3643,10 @@ BOOL HexEditWnd::IsAllSelected() {
 }
 
 BOOL HexEditWnd::IsResizingAllowed() {
+	// Paged large-file mode (phase 1): size-changing ops need the piece
+	// table, so resizing stays off; in-place byte edits still work.
+	if (bPagedMode)
+		return FALSE;
 	return bResizingAllowed;
 }
 
@@ -3045,8 +3779,7 @@ void HexEditWnd::SetStatusText() {
 	FormatOffset64(szNS, diData.qwSize);
 	FormatOffset64(szFO, qwOffset);
 	wsprintf(msg, "OS:0x%s | NS:0x%s | FO:0x%s", szOS, szNS, szFO);
-	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
-		file_type((char *)diData.pDataBuff)) {
+	if (IsPEFile()) {
 		FormatOffset64(szVA, GetVirtualAddress(qwOffset));
 		wsprintf(msg, "%s | VA:0x%s", msg, szVA);
 	}
@@ -3099,13 +3832,13 @@ BOOL HexEditWnd::IsDBCSFirstByte(ULONGLONG qwOffset) {
 	if (qwOffset >= diData.qwSize)
 		return FALSE;
 
-	byCur = *(diData.pDataBuff + qwOffset);
+	byCur = GetByteAt(qwOffset);
 	if (!IsDBCSLeadByte(byCur)) {
 		return FALSE;
 	}
 
 	for (ll = (LONGLONG)qwOffset - 1; ll >= 0; ll--) {
-		byCur = *(diData.pDataBuff + (ULONGLONG)ll);
+		byCur = GetByteAt((ULONGLONG)ll);
 		if (!IsDBCSLeadByte(byCur)) {
 			if ((qwOffset - (ULONGLONG)ll)%2) {
 				return TRUE;

@@ -410,3 +410,188 @@ void CFile::SetMapPtrSize(void* ptr, ULONGLONG qwSize)
 
 	return;
 }
+
+// 64MB sliding view: fits 32-bit address space easily, few remaps.
+#define PAGED_VIEW_SIZE (0x4000000UL)
+
+CPagedFile::CPagedFile()
+{
+	hFile = INVALID_HANDLE_VALUE;
+	hMap = NULL;
+	qwSize = 0;
+	pView = NULL;
+	qwViewOff = 0;
+	cbView = 0;
+	dwGran = 0;
+	bReadOnly = TRUE;
+	cPath[0] = '\0';
+}
+
+CPagedFile::~CPagedFile()
+{
+	Close();
+}
+
+void CPagedFile::Close()
+{
+	if (pView)
+	{
+		UnmapViewOfFile(pView);
+		pView = NULL;
+	}
+	if (hMap)
+	{
+		CloseHandle(hMap);
+		hMap = NULL;
+	}
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(hFile);
+		hFile = INVALID_HANDLE_VALUE;
+	}
+	qwSize = 0;
+	qwViewOff = 0;
+	cbView = 0;
+	cPath[0] = '\0';
+}
+
+BOOL CPagedFile::IsOpen()
+{
+	return (hFile != INVALID_HANDLE_VALUE) ? TRUE : FALSE;
+}
+
+ULONGLONG CPagedFile::GetSize()
+{
+	return qwSize;
+}
+
+BOOL CPagedFile::Open(const char *szFilePath, BOOL bRO)
+{
+	DWORD dwLow, dwHigh, dwErr;
+	DWORD dwAccess, dwShare, dwProtect;
+	SYSTEM_INFO si;
+
+	Close();
+
+	lstrcpy(cPath, szFilePath);
+	bReadOnly = bRO;
+
+	dwAccess = GENERIC_READ;
+	dwShare = FILE_SHARE_READ | FILE_SHARE_WRITE;
+	hFile = CreateFile(szFilePath, dwAccess, dwShare, NULL,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE)
+		return FALSE;
+
+	SetLastError(NO_ERROR);
+	dwLow = GetFileSize(hFile, &dwHigh);
+	dwErr = GetLastError();
+	if (dwLow == (DWORD)-1 && dwErr != NO_ERROR)
+	{
+		Close();
+		return FALSE;
+	}
+	qwSize = ((ULONGLONG)dwHigh << 32) | (ULONGLONG)dwLow;
+
+	GetSystemInfo(&si);
+	dwGran = si.dwAllocationGranularity;
+	if (dwGran == 0)
+		dwGran = 65536;
+
+	if (qwSize > 0)
+	{
+		dwProtect = PAGE_READONLY;
+		hMap = CreateFileMapping(hFile, NULL, dwProtect, 0, 0, NULL);
+		// hMap may stay NULL (e.g. empty file); ReadAt falls back to ReadFile.
+	}
+
+	return TRUE;
+}
+
+BOOL CPagedFile::EnsureView(ULONGLONG qwOff)
+{
+	ULONGLONG qwAligned, qwViewSize;
+	DWORD dwLow, dwHigh;
+
+	if (hFile == INVALID_HANDLE_VALUE || qwOff >= qwSize)
+		return FALSE;
+	if (hMap == NULL)
+		return FALSE; // caller falls back to ReadFile
+	if (pView && qwOff >= qwViewOff && qwOff < qwViewOff + (ULONGLONG)cbView)
+		return TRUE;
+
+	qwAligned = (qwOff / (ULONGLONG)dwGran) * (ULONGLONG)dwGran;
+	qwViewSize = (ULONGLONG)PAGED_VIEW_SIZE;
+	if (qwAligned + qwViewSize > qwSize)
+		qwViewSize = qwSize - qwAligned;
+
+	if (pView)
+	{
+		UnmapViewOfFile(pView);
+		pView = NULL;
+		cbView = 0;
+	}
+
+	dwLow = (DWORD)(qwAligned & 0xFFFFFFFFUL);
+	dwHigh = (DWORD)(qwAligned >> 32);
+	pView = (BYTE*)MapViewOfFile(hMap, FILE_MAP_READ, dwHigh, dwLow, (SIZE_T)qwViewSize);
+	if (!pView)
+		return FALSE;
+
+	qwViewOff = qwAligned;
+	cbView = (SIZE_T)qwViewSize;
+	return TRUE;
+}
+
+BOOL CPagedFile::ReadAt(ULONGLONG qwOff, void *pBuf, SIZE_T cb)
+{
+	BYTE *pDst = (BYTE*)pBuf;
+
+	if (!IsOpen() || pBuf == NULL)
+		return FALSE;
+	if (cb == 0)
+		return TRUE;
+	if (qwOff >= qwSize || qwOff + (ULONGLONG)cb > qwSize)
+		return FALSE;
+
+	while (cb > 0)
+	{
+		if (hMap != NULL && EnsureView(qwOff))
+		{
+			SIZE_T cbAvail = (SIZE_T)((qwViewOff + (ULONGLONG)cbView) - qwOff);
+			SIZE_T cbCopy = (cb < cbAvail) ? cb : cbAvail;
+			memcpy(pDst, pView + (SIZE_T)(qwOff - qwViewOff), cbCopy);
+			pDst += cbCopy;
+			qwOff += (ULONGLONG)cbCopy;
+			cb -= cbCopy;
+		}
+		else
+		{
+			// Fallback: positional ReadFile for the remainder of this chunk.
+			LONG lLow = (LONG)(qwOff & 0xFFFFFFFFUL);
+			LONG lHigh = (LONG)(qwOff >> 32);
+			DWORD dwRet;
+			DWORD dwWant = (cb > CFILE_IO_CHUNK) ? CFILE_IO_CHUNK : (DWORD)cb;
+			DWORD dwRead = 0;
+
+			SetLastError(NO_ERROR);
+			dwRet = SetFilePointer(hFile, lLow, &lHigh, FILE_BEGIN);
+			if (dwRet == (DWORD)-1 && GetLastError() != NO_ERROR)
+				return FALSE;
+			if (!ReadFile(hFile, pDst, dwWant, &dwRead, NULL))
+				return FALSE;
+			if (dwRead != dwWant)
+				return FALSE;
+			pDst += dwRead;
+			qwOff += (ULONGLONG)dwRead;
+			cb -= (SIZE_T)dwRead;
+		}
+	}
+
+	return TRUE;
+}
+
+BOOL CPagedFile::GetByteAt(ULONGLONG qwOff, BYTE *pby)
+{
+	return ReadAt(qwOff, pby, 1);
+}
