@@ -267,6 +267,7 @@ public:
 	BOOL          HEditReturnFromTray();
 	void          HEHandleWM_TRAYMENU(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 	void          HEHandleWM_MOVE(HWND hWnd, WPARAM wParam, LPARAM lParam);
+	void          HEHandleWM_DROPFILES(HWND hWnd, WPARAM wParam, LPARAM lParam);
 	void		  OptionDlgInit(HWND);
 	BOOL		  OptionDlgCommand(HWND, DWORD);
 	void          ConfigureTBCCP();

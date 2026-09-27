@@ -109,6 +109,10 @@ LRESULT FUNC_CALLBACK HEditWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		HEdit.HEHandleWM_MOVE(hWnd, wParam, lParam);
 		break;
 
+	case WM_DROPFILES:
+		HEdit.HEHandleWM_DROPFILES(hWnd, wParam, lParam);
+		break;
+
 	case WM_CLOSE:
 		HEdit.HEHandleWM_CLOSE(hWnd, uMsg, wParam, lParam);
 		break;

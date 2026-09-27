@@ -268,6 +268,7 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 		   NULL);
 
 	HEdit.hMainWnd = hWnd;
+	DragAcceptFiles(hWnd, TRUE);
 
 	hTB = CreateToolbarEx(
 		 hWnd,
@@ -4441,6 +4442,40 @@ void HexEditWnd::HEHandleWM_MOVE(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 	if (!IsIconic(hWnd) &&
 		!IsZoomed(hWnd) )
 		GetWindowRect( hWnd, &rctLastPos );
+	return;
+}
+
+// Drag-and-drop: open each dropped file in a new 16Edit window (new
+// process), leaving the current window untouched.
+void HexEditWnd::HEHandleWM_DROPFILES(HWND hWnd, WPARAM wParam, LPARAM lParam) {
+	HDROP hDrop = (HDROP)wParam;
+	UINT nFiles;
+	UINT i;
+	char szExe[MAX_PATH];
+	char szFile[MAX_PATH];
+	char szParams[MAX_PATH + 4];
+
+	if (!hDrop)
+		return;
+
+	nFiles = DragQueryFile(hDrop, 0xFFFFFFFF, NULL, 0);
+	if (nFiles == 0)
+	{
+		DragFinish(hDrop);
+		return;
+	}
+
+	GetModuleFileName(GetInstance(), szExe, sizeof(szExe));
+
+	for (i = 0; i < nFiles; i++)
+	{
+		if (!DragQueryFile(hDrop, i, szFile, sizeof(szFile)))
+			continue;
+		wsprintf(szParams, "\"%s\"", szFile);
+		ShellExecute(hWnd, "open", szExe, szParams, NULL, SW_SHOWNORMAL);
+	}
+
+	DragFinish(hDrop);
 	return;
 }
 
