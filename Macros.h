@@ -13,8 +13,12 @@ void DebugPrint(char *szFormat, ...);
 #define MEMCPY mymemcpy
 
 // Compatibility for old SDKs (e.g. VC6) that lack 64-bit pointer APIs.
-// On 32-bit these map to the 32-bit versions; on 64-bit SDKs the real
-// 64-bit versions are used.
+// NOTE: LONG_PTR/UINT_PTR/DWORD_PTR are typedefs (not macros) and
+// SetWindowLongPtr/GetClassLongPtr are functions (not macros), so plain
+// #ifndef would ALWAYS trigger — even on 64-bit SDKs — and silently
+// truncate 64-bit pointers/handles to 32-bit (crash: jump to 0x40001FEC
+// instead of 0x140001FEC). Therefore these fallbacks must NEVER apply
+// on _WIN64; they are only for 32-bit builds with old SDKs.
 #ifndef GWLP_WNDPROC
 #define GWLP_WNDPROC GWL_WNDPROC
 #endif
@@ -25,6 +29,8 @@ void DebugPrint(char *szFormat, ...);
 #define GCLP_HICON (-14)
 #endif
 #endif
+#if !defined(_WIN64)
+#if _MSC_VER < 1300
 #ifndef LONG_PTR
 #define LONG_PTR LONG
 #endif
@@ -34,11 +40,15 @@ void DebugPrint(char *szFormat, ...);
 #ifndef DWORD_PTR
 #define DWORD_PTR DWORD
 #endif
+#endif
+#if _MSC_VER < 1300
 #ifndef SetWindowLongPtr
 #define SetWindowLongPtr SetWindowLong
 #endif
 #ifndef GetClassLongPtr
 #define GetClassLongPtr GetClassLong
+#endif
+#endif
 #endif
 #ifndef SIZE_MAX
 #define SIZE_MAX ((SIZE_T)-1)

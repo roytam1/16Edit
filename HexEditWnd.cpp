@@ -705,6 +705,9 @@ void HexEditWnd::HEHandleWM_SIZE(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 	RECT              rct;
 	UINT              uWidth, uHeight;
 
+	if (hWnd == NULL)
+		return;
+
 	if ( wParam != SIZE_MINIMIZED &&
 		 wParam != SIZE_MAXIMIZED)
 		GetWindowRect( hWnd, &rctLastPos );
@@ -718,24 +721,31 @@ void HexEditWnd::HEHandleWM_SIZE(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 	uWidth = LOWORD(lParam);
 	uHeight = HIWORD(lParam); 
 
-	if (uFontHeight) { // avoid division through 0
-		// calc max lines
-		uMaxLines = (uHeight - iyHETop - SB_HEIGHT) / uFontHeight;
+	if (uFontHeight && uFontWidth) { // avoid division through 0
+		// calc max lines (guard unsigned underflow for tiny/minimized windows)
+		if (uHeight > iyHETop + SB_HEIGHT)
+			uMaxLines = (uHeight - iyHETop - SB_HEIGHT) / uFontHeight;
+		else
+			uMaxLines = 0;
 
 		// bottom of HE
 		GetClientRect(hWnd, &rct);
 
-		HEdit.iyHEBottom = rct.bottom - SB_HEIGHT;
+		if (rct.bottom > (LONG)SB_HEIGHT)
+			HEdit.iyHEBottom = (UINT)(rct.bottom - SB_HEIGHT);
+		else
+			HEdit.iyHEBottom = 0;
 
 		// get HE rect
-		rctHE.top     = iyHETop;
-		rctHE.bottom  = iyHEBottom;
+		rctHE.top     = (LONG)iyHETop;
+		rctHE.bottom  = (LONG)iyHEBottom;
 		rctHE.left    = 0;
-		rctHE.right   = CHARS_X + 16 * uFontWidth;
+		rctHE.right   = (LONG)(CHARS_X + 16 * uFontWidth);
 	}
 
-	// resize TB
-	SendMessage(hTB, TB_AUTOSIZE, 0, 0);
+	// resize TB (hTB is NULL during initial CreateWindow WM_SIZE)
+	if (hTB)
+		SendMessage(hTB, TB_AUTOSIZE, 0, 0);
 	return;	// RET
 }
 
