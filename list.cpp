@@ -1,26 +1,26 @@
 #include "hexeditwnd.h"
 
-HE_OPER::HE_OPER(EDIT_OPER optype, DWORD offset, DWORD oldlen, DWORD newlen) {
+HE_OPER::HE_OPER(EDIT_OPER optype, ULONGLONG offset, ULONGLONG oldlen, ULONGLONG newlen) {
 	type		= optype;
-	dwOffset	= offset;
-	dwOldLen	= oldlen;
-	dwNewLen	= newlen;
+	qwOffset	= offset;
+	qwOldLen	= oldlen;
+	qwNewLen	= newlen;
 	if (oldlen >= 1) {
-		oldData	= new BYTE[oldlen];
+		oldData	= new BYTE[(SIZE_T)oldlen];
 	} else {
 		oldData = NULL;
 	}
 
 	if (newlen >= 1) {
-		newData	= new BYTE[newlen];
+		newData	= new BYTE[(SIZE_T)newlen];
 	} else {
 		newData = NULL;
 	}
 }
 
 HE_OPER::~HE_OPER() {
-	delete newData;
-	delete oldData;
+	delete [] newData;
+	delete [] oldData;
 }
 
 EditOperList::EditOperList() {

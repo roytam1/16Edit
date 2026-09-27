@@ -77,8 +77,8 @@ void DebugPrint(char *szFormat, ...) {
 	OutputDebugString(msg);
 }
 
-void mymemcpy(void *dest, void *src, int count) {
-	int i;
+void mymemcpy(void *dest, void *src, SIZE_T count) {
+	SIZE_T i;
 	if (dest < src) {
 		for (i = 0; i < count; i++) {
 			((BYTE*)dest)[i] = ((BYTE*)src)[i]; 
@@ -163,25 +163,35 @@ void HexEditWnd::InitEdition() {
 
 	stat.bCaretPosValid = TRUE;
 	stat.posCaret.bHiword = TRUE;
-	stat.iLastLine = -1;
+	stat.llLastLine = -1;
 
 	delete operList;
 	operList		  = new EditOperList();
 	current			  = operList;
 	savepoint		  = operList;
 	bSavePointValid	  = TRUE;
-	diData.dwSize     = 0;
+	diData.qwSize     = 0;
 
 	return;
 }
 
 void HexEditWnd::QuitEdition() {
 	free(diData.pDataBuff);
+	diData.pDataBuff = NULL;
+	diData.qwSize = 0;
 	if (search.bInited) {
 		if (search.pData)
 			free(search.pData);
 		if (search.pDlgStr)
 			free(search.pDlgStr);
+		if (search.pReplaceData)
+			free(search.pReplaceData);
+		if (search.pReplaceStr)
+			free(search.pReplaceStr);
+		search.pData = NULL;
+		search.pDlgStr = NULL;
+		search.pReplaceData = NULL;
+		search.pReplaceStr = NULL;
 	}
 	return;
 }
@@ -237,7 +247,7 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 		 ID_TB,
 		 50, // number of buttons in the bitmap
 		 NULL,
-		 (DWORD)LoadBitmap(HEdit.GetInstance(), (PSTR)IDB_TOOLBAR),
+		 (UINT_PTR)LoadBitmap(HEdit.GetInstance(), (PSTR)IDB_TOOLBAR),
 		 (LPTBBUTTON)&TBbs,
 		 ARRAY_ITEMS(TBbs),
 		 16,
@@ -246,7 +256,7 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 		 16,
 		 sizeof(TBBUTTON));
 	HEdit.SetTBHandle(hTB);
-	pOrgTBWndProc = (WNDPROC)SetWindowLong(hTB, GWL_WNDPROC, (DWORD)TBHookProc);
+	pOrgTBWndProc = (WNDPROC)SetWindowLongPtr(hTB, GWLP_WNDPROC, (LONG_PTR)TBHookProc);
 
 	GetClientRect(hTB, &rct);
 	HEdit.iyHETop = rct.bottom - rct.top + 2;
@@ -289,60 +299,65 @@ BOOL HexEditWnd::DoEditFile(char* szFilePath, BOOL bForceReadOnly) {
 		return FALSE;
 
 	diOrgData.bReadOnly  = fInput.IsFileReadOnly();
-	diOrgData.dwSize     = fInput.GetFSize();
+	diOrgData.qwSize     = fInput.GetFSize();
 	diOrgData.pDataBuff  = (BYTE*)fInput.GetMapPtr();
-	dwOldSize = diOrgData.dwSize;
+	qwOldSize = diOrgData.qwSize;
 
 	diData = diOrgData;
 	fInput.SetMapPtrSize(NULL, 0);
 	fInput.Destroy();
 
-	if (file_type((char *)diData.pDataBuff)) {
-		bFileOffset = FALSE;
+	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER)) {
+		if (file_type((char *)diData.pDataBuff)) {
+			bFileOffset = FALSE;
+		}
 	}
 
 	SetHEWndCaption();
 	return TRUE;
 }
 
-DWORD HexEditWnd::GetFileOffset(DWORD dwVirtualAddress) {
-	DWORD	dwOffset;
+ULONGLONG HexEditWnd::GetFileOffset(ULONGLONG qwVirtualAddress) {
+	ULONGLONG	qwOffset;
 
-	if (file_type((char *)diData.pDataBuff)) {
-		dwOffset = get_fo((char *)diData.pDataBuff, dwVirtualAddress);
+	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
+		file_type((char *)diData.pDataBuff)) {
+		qwOffset = get_fo((char *)diData.pDataBuff, qwVirtualAddress);
 	} else {
-		dwOffset = dwVirtualAddress;
+		qwOffset = qwVirtualAddress;
 	}
-	return dwOffset;
+	return qwOffset;
 }
 
-DWORD HexEditWnd::GetVirtualAddress(DWORD dwFileOffset) {
-	DWORD	dwOffset;
+ULONGLONG HexEditWnd::GetVirtualAddress(ULONGLONG qwFileOffset) {
+	ULONGLONG	qwOffset;
 
-	if (file_type((char *)diData.pDataBuff)) {
-		dwOffset = get_va((char *)diData.pDataBuff, dwFileOffset);
+	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
+		file_type((char *)diData.pDataBuff)) {
+		qwOffset = get_va((char *)diData.pDataBuff, qwFileOffset);
 	} else {
-		dwOffset = dwFileOffset;
+		qwOffset = qwFileOffset;
 	}
-	return dwOffset;
+	return qwOffset;
 }
 
-DWORD HexEditWnd::GetOffset(DWORD dwFileOffset) {
-	DWORD	dwOffset;
+ULONGLONG HexEditWnd::GetOffset(ULONGLONG qwFileOffset) {
+	ULONGLONG	qwOffset;
 
 	if (bFileOffset) {
-		dwOffset = dwFileOffset;
+		qwOffset = qwFileOffset;
 	} else {
-		dwOffset = GetVirtualAddress(dwFileOffset);
+		qwOffset = GetVirtualAddress(qwFileOffset);
 	}
-	return dwOffset;
+	return qwOffset;
 }
 
 BOOL HexEditWnd::PaintText(HWND hWnd) {
 	HDC           hDC, hdcBuff;
-	DWORD         dwOffset;
+	ULONGLONG     qwOffset;
 	UINT          u, u2, icySel;
 	char          cBuff[40];
+	char          cOffBuff[24];
 	BYTE          byCur, byNext;
 	RECT          rct;
 	HBITMAP       hBmp;
@@ -366,42 +381,43 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 	FillRect(hdcBuff, &rct, hbrColor);
 	DeleteObject(hbrColor);
 
-	if (!diData.dwSize)
+	if (!diData.qwSize)
 		goto Exit; // ERR
 
 	// paint to bmp
-	dwOffset = stat.dwCurOffset;
+	qwOffset = stat.qwCurOffset;
 
 	for (u = 0; u < uMaxLines; u++) {
 		// end of buffer ?
-		if (dwOffset >= diData.dwSize)
+		if (qwOffset >= diData.qwSize)
 			break;
 
-		// paint offset
+		// paint offset (8 digits below 4GB, 16 digits above)
 		SetTextColor(hdcBuff, RGB_BLACK);
-		wsprintf(cBuff, H8":", GetOffset(dwOffset));
+		FormatOffset64(cOffBuff, GetOffset(qwOffset));
+		wsprintf(cBuff, "%s:", cOffBuff);
 		SelectObject(hdcBuff, hFont);
-		TextOut(hdcBuff, LEFT_OFFSET, u * uFontHeight + TOP_OFFSET, cBuff, 9);
+		TextOut(hdcBuff, LEFT_OFFSET, u * uFontHeight + TOP_OFFSET, cBuff, lstrlen(cBuff));
 
 		// paint digit pairs
 		for (u2 = 0; u2 < 16; u2++) {
 			// end of buffer ?
-			if (dwOffset >= diData.dwSize)
+			if (qwOffset >= diData.qwSize)
 				break; // upper, same structured decision handles painting end
 
 			//
 			// change at this position?
 			//
-			byCur = *(BYTE*)((DWORD)diData.pDataBuff + dwOffset);
+			byCur = *(diData.pDataBuff + qwOffset);
 
 			// next byte may be multibyte
-			if (dwOffset <= diData.dwSize - 1) {
-				byNext = *(BYTE*)((DWORD)diData.pDataBuff + dwOffset + 1);
+			if (qwOffset + 1 < diData.qwSize) {
+				byNext = *(diData.pDataBuff + qwOffset + 1);
 			} else {
 				byNext = 0;
 			}
 
-			switch (GetDataStatus(dwOffset)) {
+			switch (GetDataStatus(qwOffset)) {
 				case 0:
 					SetTextColor(hdcBuff, RGB_BLACK);
 					break;
@@ -420,7 +436,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 			// paint digit pair
 			//
 			if (stat.bCaretVisible &&
-				stat.posCaret.dwOffset == dwOffset &&
+				stat.posCaret.qwOffset == qwOffset &&
 				stat.posCaret.bTextSection)
 				SelectObject(hdcBuff, hFontU);
 			else
@@ -435,7 +451,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 			// paint character
 			//
 			if (stat.bCaretVisible &&
-				stat.posCaret.dwOffset == dwOffset &&
+				stat.posCaret.qwOffset == qwOffset &&
 				!stat.posCaret.bTextSection)
 				SelectObject(hdcBuff, hFontU);
 			else
@@ -443,7 +459,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 
 			if (!bSkipOneByte) {
 				if (IsDBCSLeadByte(byCur) && bDispMultiByte) {
-					if (dwOffset == stat.dwCurOffset && !IsDBCSFirstByte(dwOffset)) {
+					if (qwOffset == stat.qwCurOffset && !IsDBCSFirstByte(qwOffset)) {
 						lstrcpy(cBuff, " ");
 					} else {
 						if (byNext != 0) {
@@ -470,10 +486,10 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 			// draw sel
 			//
 			if (stat.bSel &&
-				dwOffset >= stat.dwOffSelStart &&
-				dwOffset <= stat.dwOffSelEnd) {
-				if (dwOffset == stat.dwOffSelEnd ||
-					dwOffset % 16 == 15)
+				qwOffset >= stat.qwOffSelStart &&
+				qwOffset <= stat.qwOffSelEnd) {
+				if (qwOffset == stat.qwOffSelEnd ||
+					qwOffset % 16 == 15)
 					icySel = uFontWidth * 2 + 2;
 				else
 					icySel = DIGIT_PAIR_WIDTH;
@@ -502,7 +518,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 			}
 
 			// adjust vars
-			++dwOffset;
+			++qwOffset;
 		}
 	}
 
@@ -569,7 +585,7 @@ void HexEditWnd::HEHandleWM_KILLFOCUS(HWND hWnd) {
 BOOL HexEditWnd::SetCaret(PHE_POS ppos)
 {
 	BOOL     bRet = FALSE;
-	DWORD    dwOffDelta;
+	ULONGLONG qwOffDelta;
 	UINT     uxPair, uyLine, ux;
 
 	if (IsOutOfRange(ppos))
@@ -581,16 +597,16 @@ BOOL HexEditWnd::SetCaret(PHE_POS ppos)
 		return FALSE; // ERR
 
 	// new pos in current range?
-	if (!IsOffsetVisible(ppos->dwOffset)) {
+	if (!IsOffsetVisible(ppos->qwOffset)) {
 		if (stat.bCaretVisible)
 			HideCaret(hMainWnd);
 		stat.bCaretVisible = FALSE;
 		return FALSE; // ERR
 	}
 
-	dwOffDelta = ppos->dwOffset - stat.dwCurOffset;
-	uyLine = dwOffDelta / 16;
-	uxPair = dwOffDelta % 16;
+	qwOffDelta = ppos->qwOffset - stat.qwCurOffset;
+	uyLine = (UINT)(qwOffDelta / 16);
+	uxPair = (UINT)(qwOffDelta % 16);
 
 	// caret in the text section ?
 	if (ppos->bTextSection) {
@@ -621,16 +637,16 @@ BOOL HexEditWnd::SetCaret(PHE_POS ppos)
 //
 // overloaded
 //
-BOOL HexEditWnd::SetCaret(DWORD dwOffset)
+BOOL HexEditWnd::SetCaret(ULONGLONG qwOffset)
 {
 	HE_POS  posNew;
 
-	if (IsOutOfRange(dwOffset))
+	if (IsOutOfRange(qwOffset))
 		return FALSE; // ERR
 
 	posNew.bHiword      = TRUE;
 	posNew.bTextSection = FALSE;
-	posNew.dwOffset     = dwOffset;
+	posNew.qwOffset     = qwOffset;
 
 	return SetCaret(&posNew);
 }
@@ -642,21 +658,21 @@ BOOL HexEditWnd::SetCaret() {
 //
 // checks whether an Offset is currently visible in the GUI
 //
-BOOL HexEditWnd::IsOffsetVisible(DWORD dwOffset)
+BOOL HexEditWnd::IsOffsetVisible(ULONGLONG qwOffset)
 {
-	DWORD dwBytes2C;
+	ULONGLONG qwBytes2C;
 
 	// out of mem range ?
-	if (dwOffset >= diData.dwSize)
+	if (qwOffset >= diData.qwSize)
 		return FALSE; // ERR
 
 	// out of visible range ?
-	dwBytes2C = 16 * uMaxLines;
-	if (dwBytes2C + stat.dwCurOffset > diData.dwSize)
-		dwBytes2C = diData.dwSize - stat.dwCurOffset;
+	qwBytes2C = (ULONGLONG)16 * uMaxLines;
+	if (qwBytes2C + stat.qwCurOffset > diData.qwSize)
+		qwBytes2C = diData.qwSize - stat.qwCurOffset;
 
-	if (dwOffset >= stat.dwCurOffset &&
-		dwOffset <  stat.dwCurOffset + dwBytes2C)
+	if (qwOffset >= stat.qwCurOffset &&
+		qwOffset <  stat.qwCurOffset + qwBytes2C)
 		return TRUE; // OK
 	else
 		return FALSE; // ERR
@@ -743,7 +759,7 @@ BOOL HexEditWnd::HEHandleLButton(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 {
 	POINT   pClick;
 	HE_POS  pos;
-	static  DWORD   dwOldOff;
+	static  ULONGLONG qwOldOff;
 	static  BOOL	lastvalid = FALSE;
 
 	pClick.x = LOWORD(lParam);
@@ -759,14 +775,14 @@ BOOL HexEditWnd::HEHandleLButton(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 		stat.bMouseSelecting = TRUE;
 		if (!stat.bSel || lastvalid == FALSE) {
 			lastvalid = TRUE;
-			dwOldOff = stat.posCaret.dwOffset;
+			qwOldOff = stat.posCaret.qwOffset;
 		}
 		stat.posLastLButtonDown = pos;
 		stat.bLastLBDownPos = TRUE;
 
 		// handle shift key actions ?
 		if ( TESTBIT(wParam, MK_SHIFT) && stat.bCaretPosValid )
-			SetSelection( dwOldOff, pos.dwOffset );
+			SetSelection( qwOldOff, pos.qwOffset );
 		else {
 			lastvalid = FALSE;
 			if (stat.bSel) {
@@ -815,14 +831,14 @@ BOOL HexEditWnd::PointToPos(IN POINT *pp, OUT PHE_POS ppos) {
 		}
 
 		// out of range?
-		if (IsOutOfRange(stat.dwCurOffset + uLine * 16 + uPair))
+		if (IsOutOfRange(stat.qwCurOffset + uLine * 16 + uPair))
 			return FALSE; // ERR		
 
 		// x -> LOWORD ?
 		ppos->bHiword = ((UINT)pp->x > uxCurPair + uFontWidth) ? FALSE: TRUE;
 
 		// save offset
-		ppos->dwOffset = stat.dwCurOffset + uLine * 16 + uPair;
+		ppos->qwOffset = stat.qwCurOffset + uLine * 16 + uPair;
 
 		return TRUE; // OK
 	}
@@ -836,13 +852,13 @@ BOOL HexEditWnd::PointToPos(IN POINT *pp, OUT PHE_POS ppos) {
 		uPair /= uFontWidth;
 
 		// out of range?
-		if (IsOutOfRange(stat.dwCurOffset + uLine * 16 + uPair))
+		if (IsOutOfRange(stat.qwCurOffset + uLine * 16 + uPair))
 			return FALSE; // ERR
 
 		// build output
 		ppos->bTextSection = TRUE;
 		ppos->bHiword      = TRUE;
-		ppos->dwOffset     = stat.dwCurOffset + uLine * 16 + uPair;
+		ppos->qwOffset     = stat.qwCurOffset + uLine * 16 + uPair;
 
 		return TRUE; // OK
 	} else
@@ -851,8 +867,8 @@ BOOL HexEditWnd::PointToPos(IN POINT *pp, OUT PHE_POS ppos) {
 
 BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	HE_POS  posNew;
-	int     iNewLine;
-	DWORD   dwOff;
+	LONGLONG llNewLine;
+	ULONGLONG qwOff;
 
 	if (wParam == VK_ESCAPE) {
 		if (stat.bSel) {
@@ -885,7 +901,7 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 			SetCaret();
 
 			// make visible if is not
-			if (!IsOffsetVisible(stat.posCaret.dwOffset))
+			if (!IsOffsetVisible(stat.posCaret.qwOffset))
 				SetTopLine();
 
 			return TRUE; // OK
@@ -898,27 +914,27 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		posNew = stat.posCaret;
 		switch (wParam) {
 		case VK_LEFT:	 // left
-			posNew.dwOffset--;
+			posNew.qwOffset--;
 			break;
 
 		case VK_RIGHT:	 // right
-			posNew.dwOffset++;
+			posNew.qwOffset++;
 			break;
 
 		case VK_NEXT:	 // page down
-			posNew.dwOffset += uMaxLines * 16;
+			posNew.qwOffset += uMaxLines * 16;
 			break;
 
 		case VK_PRIOR:	 // page up
-			posNew.dwOffset -= uMaxLines * 16;
+			posNew.qwOffset -= uMaxLines * 16;
 			break;
 
 		case VK_DOWN:	 // down
-			posNew.dwOffset += 16;
+			posNew.qwOffset += 16;
 			break;
 
 		case VK_UP:		 // up
-			posNew.dwOffset -= 16;
+			posNew.qwOffset -= 16;
 			break;
 
 		default:
@@ -930,14 +946,14 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 			Beep();
 
 		if (stat.bSel) {
-			if (stat.dwOffSelStart == stat.posCaret.dwOffset)
-				dwOff = stat.dwOffSelEnd;
+			if (stat.qwOffSelStart == stat.posCaret.qwOffset)
+				qwOff = stat.qwOffSelEnd;
 			else
-				dwOff = stat.dwOffSelStart;
+				qwOff = stat.qwOffSelStart;
 
-			SetSelection( dwOff, posNew.dwOffset);
+			SetSelection( qwOff, posNew.qwOffset);
 		} else
-			SetSelection( stat.posCaret.dwOffset, posNew.dwOffset );
+			SetSelection( stat.posCaret.qwOffset, posNew.qwOffset );
 
 		SetCaret(&posNew);
 		MakeCaretVisible();
@@ -949,53 +965,53 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 	// move caret in HE area / move current line
 	//
 	posNew    = stat.posCaret;
-	iNewLine  = GetCurrentLine();
+	llNewLine  = (LONGLONG)GetCurrentLine();
 	switch (wParam) {
 	case VK_NEXT:	 // page down
-		posNew.dwOffset += uMaxLines * 16;
-		iNewLine += uMaxLines;
+		posNew.qwOffset += uMaxLines * 16;
+		llNewLine += uMaxLines;
 		break;
 
 	case VK_PRIOR:	 // page up
-		posNew.dwOffset -= uMaxLines * 16;
-		iNewLine -= uMaxLines;
+		posNew.qwOffset -= uMaxLines * 16;
+		llNewLine -= uMaxLines;
 		break;
 
 	case VK_DOWN:	 // down
-		posNew.dwOffset += 16;
-		++iNewLine;
+		posNew.qwOffset += 16;
+		++llNewLine;
 		break;
 
 	case VK_UP:		 // up
-		posNew.dwOffset -= 16;
-		--iNewLine;
+		posNew.qwOffset -= 16;
+		--llNewLine;
 		break;
 
 	case VK_RIGHT:	 // rigth
 		if (stat.posCaret.bTextSection) {
-			++posNew.dwOffset;
+			++posNew.qwOffset;
 			posNew.bHiword = TRUE;
 		} else {
 			posNew.bHiword ^= 1;    
 			if (!stat.posCaret.bHiword)
-				++posNew.dwOffset;
+				++posNew.qwOffset;
 		}
 		break;
 
 	case VK_LEFT:	 // left
 		if (stat.posCaret.bTextSection) {
-			--posNew.dwOffset;
+			--posNew.qwOffset;
 			posNew.bHiword = TRUE;
 		} else {
 			posNew.bHiword ^= 1;
 			if (stat.posCaret.bHiword)
-				--posNew.dwOffset;
+				--posNew.qwOffset;
 		}
 		break;
 
 	case VK_BACK:
 		if (stat.posCaret.bTextSection)
-			--posNew.dwOffset;
+			--posNew.qwOffset;
 		break;
 
 	default:
@@ -1007,11 +1023,11 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		wParam != VK_RIGHT && 
 		wParam != VK_LEFT) {
 		// validate
-		if (ValidateLine(&iNewLine))
+		if (ValidateLine(&llNewLine))
 			Beep();
 
 		// set
-		SetCurrentLine(iNewLine);
+		SetCurrentLine((ULONGLONG)llNewLine);
 	} else {
 		// validate
 		if (ValidatePos(&posNew))
@@ -1033,17 +1049,22 @@ BOOL HexEditWnd::HEHandleWM_KEYDOWN(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 // whether it was needed to reset the top line
 //
 BOOL HexEditWnd::MakeCaretVisible() {
-	DWORD dwLastVisibleOff;
+	ULONGLONG qwLastVisibleOff;
+	ULONGLONG qwLine;
 
-	if (IsOffsetVisible(stat.posCaret.dwOffset))
+	if (IsOffsetVisible(stat.posCaret.qwOffset))
 		return FALSE; // ERR
 
-	dwLastVisibleOff = __min(uMaxLines * 16 + stat.dwCurOffset,
-							 diData.dwSize);
-	if (stat.posCaret.dwOffset < stat.dwCurOffset) // caret above ?
-		SetTopLine((int)(stat.posCaret.dwOffset / 16));
+	qwLastVisibleOff = __min((ULONGLONG)uMaxLines * 16 + stat.qwCurOffset,
+							 diData.qwSize);
+	if (stat.posCaret.qwOffset < stat.qwCurOffset) // caret above ?
+		qwLine = stat.posCaret.qwOffset / 16;
 	else // caret below
-		SetTopLine((int)(stat.posCaret.dwOffset / 16 - uMaxLines + 1));
+		qwLine = stat.posCaret.qwOffset / 16 > uMaxLines ? stat.posCaret.qwOffset / 16 - uMaxLines + 1 : 0;
+
+	if (qwLine > (ULONGLONG)INT_MAX)
+		qwLine = INT_MAX;
+	SetTopLine((int)qwLine);
 
 	return TRUE; // OK
 }
@@ -1055,12 +1076,18 @@ BOOL HexEditWnd::MakeCaretVisible() {
 // whether sth was fixed
 //
 BOOL HexEditWnd::ValidatePos(PHE_POS ppos) {
-	if ((int)ppos->dwOffset < 0) {
-		ppos->dwOffset = 0;
+	if (diData.qwSize == 0) {
+		ppos->qwOffset = 0;
 		ppos->bHiword  = TRUE;
 		return TRUE; // OK
-	} else if (ppos->dwOffset >= diData.dwSize) {
-		ppos->dwOffset = diData.dwSize - 1;
+	}
+	if ((LONGLONG)ppos->qwOffset < 0) {
+		// underflow (e.g. moved up from 0): clamp to start
+		ppos->qwOffset = 0;
+		ppos->bHiword  = TRUE;
+		return TRUE; // OK
+	} else if (ppos->qwOffset >= diData.qwSize) {
+		ppos->qwOffset = diData.qwSize - 1;
 		ppos->bHiword  = FALSE;
 		return TRUE; // OK
 	} else
@@ -1081,20 +1108,30 @@ BOOL HexEditWnd::SetCaretSet(BOOL bSet) {
 }
 
 void HexEditWnd::SetupVScrollbar() {
-	DWORD dwTotalLines = GetTotalLineNum();
+	ULONGLONG qwTotalLines = GetTotalLineNum();
+	LONGLONG llMax;
 
-	SetScrollRange(hMainWnd, SB_VERT, 0, (int)(dwTotalLines - 1), TRUE);
+	// Win32 scrollbars take int; clamp for huge files (>~34GB).
+	// Files >4GB (up to ~268M lines) fit fine.
+	if (qwTotalLines == 0)
+		llMax = 0;
+	else if (qwTotalLines - 1 > (ULONGLONG)INT_MAX)
+		llMax = INT_MAX;
+	else
+		llMax = (LONGLONG)(qwTotalLines - 1);
+
+	SetScrollRange(hMainWnd, SB_VERT, 0, (int)llMax, TRUE);
 	return;
 }
 
-UINT HexEditWnd::GetTotalLineNum() {
-	DWORD dwTotalLines;
+ULONGLONG HexEditWnd::GetTotalLineNum() {
+	ULONGLONG qwTotalLines;
 
-	dwTotalLines = diData.dwSize / 16;
-	if (diData.dwSize % 16)
-		++dwTotalLines;
+	qwTotalLines = diData.qwSize / 16;
+	if (diData.qwSize % 16)
+		++qwTotalLines;
 
-	return dwTotalLines;
+	return qwTotalLines;
 }
 
 BOOL HexEditWnd::HEHandleWM_VSCROLL(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1117,7 +1154,15 @@ BOOL HexEditWnd::HEHandleWM_VSCROLL(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		break;
 
 	case SB_BOTTOM:
-		nPos = GetTotalLineNum() - 1;
+		{
+			ULONGLONG qwTotal = GetTotalLineNum();
+			if (qwTotal == 0)
+				nPos = 0;
+			else if (qwTotal - 1 > (ULONGLONG)INT_MAX)
+				nPos = INT_MAX;
+			else
+				nPos = (int)(qwTotal - 1);
+		}
 		break;
 
 	case SB_LINEDOWN:
@@ -1144,25 +1189,36 @@ BOOL HexEditWnd::HEHandleWM_VSCROLL(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 // sets the line to the top of the visible data range
 //
 BOOL HexEditWnd::SetTopLine(int iNewLine) {
-	int nNewPos;
+	LONGLONG llNewPos;
+	ULONGLONG qwTotal;
+	LONGLONG llMaxLine;
 
-	nNewPos = iNewLine;
+	llNewPos = iNewLine;
 
-	// validation
-	if (nNewPos < 0)
-		nNewPos = 0;
-	nNewPos = __min(nNewPos, (int)GetTotalLineNum() - 1);
+	// validation (64-bit aware, clamped to scrollbar int range)
+	qwTotal = GetTotalLineNum();
+	if (qwTotal == 0)
+		llMaxLine = 0;
+	else if (qwTotal - 1 > (ULONGLONG)INT_MAX)
+		llMaxLine = INT_MAX;
+	else
+		llMaxLine = (LONGLONG)(qwTotal - 1);
+
+	if (llNewPos < 0)
+		llNewPos = 0;
+	if (llNewPos > llMaxLine)
+		llNewPos = llMaxLine;
 
 	// avoid repainting ?
-	if (nNewPos == stat.iLastLine)
+	if (llNewPos == stat.llLastLine)
 		return TRUE; // OK
 
 	// set new line
-	SetScrollPos(hMainWnd, SB_VERT, nNewPos, TRUE);
-	stat.iLastLine = nNewPos;
+	SetScrollPos(hMainWnd, SB_VERT, (int)llNewPos, TRUE);
+	stat.llLastLine = llNewPos;
 
 	// set new offset
-	stat.dwCurOffset = nNewPos * 16;
+	stat.qwCurOffset = (ULONGLONG)llNewPos * 16;
 
 	// reset caret
 	if (stat.bCaretPosValid)
@@ -1174,12 +1230,15 @@ BOOL HexEditWnd::SetTopLine(int iNewLine) {
 	return TRUE; // OK
 }
 
-BOOL HexEditWnd::SetTopLine(DWORD dwOffset) {
-	return SetTopLine( (int)dwOffset / 16);
+BOOL HexEditWnd::SetTopLine(ULONGLONG qwOffset) {
+	ULONGLONG qwLine = qwOffset / 16;
+	if (qwLine > (ULONGLONG)INT_MAX)
+		return SetTopLine(INT_MAX);
+	return SetTopLine((int)qwLine);
 }
 
 BOOL HexEditWnd::SetTopLine() {
-	return SetTopLine((DWORD)stat.posCaret.dwOffset);
+	return SetTopLine(stat.posCaret.qwOffset);
 }
 
 void HexEditWnd::RepaintClientArea() {
@@ -1214,7 +1273,7 @@ void HexEditWnd::HEHandleWM_MOUSEWHEEL(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 void HexEditWnd::HEHandleWM_SHOWWINDOW(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	HEdit.HESetFont(HEdit.hFont);
 	SetupVScrollbar();
-	SetTopLine(stat.dwCurOffset);
+	SetTopLine(stat.qwCurOffset);
 	ConfigureTB();
 	SetHEWndCaption();
 
@@ -1529,12 +1588,12 @@ void HexEditWnd::ErrMsg(HWND hWnd, char* szText, char* szCaption) {
 	return;
 }
 
-BOOL HexEditWnd::IsOutOfRange(DWORD dwOffset) {
-	return(dwOffset >= diData.dwSize) ? TRUE : FALSE;
+BOOL HexEditWnd::IsOutOfRange(ULONGLONG qwOffset) {
+	return(qwOffset >= diData.qwSize) ? TRUE : FALSE;
 }
 
 BOOL HexEditWnd::IsOutOfRange(PHE_POS ppos) {
-	return(ppos->dwOffset >= diData.dwSize) ? TRUE : FALSE;
+	return(ppos->qwOffset >= diData.qwSize) ? TRUE : FALSE;
 }
 
 void HexEditWnd::SetCaretPosData(PHE_POS ppos) {
@@ -1544,12 +1603,12 @@ void HexEditWnd::SetCaretPosData(PHE_POS ppos) {
 	return;
 }
 
-void HexEditWnd::SetCaretPosData(DWORD dwOffset) {
+void HexEditWnd::SetCaretPosData(ULONGLONG qwOffset) {
 	HE_POS  posNew;
 
 	posNew.bHiword       = TRUE;
 	posNew.bTextSection  = FALSE;
-	posNew.dwOffset      = dwOffset;
+	posNew.qwOffset      = qwOffset;
 	SetCaretPosData(&posNew);
 
 	return;
@@ -1580,7 +1639,7 @@ LRESULT HexEditWnd::HEHandleWM_CHAR(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 	hiWord = stat.posCaret.bHiword;
 
 	// process HE change
-	byOld = *(BYTE*)((DWORD)diData.pDataBuff + stat.posCaret.dwOffset);
+	byOld = *(diData.pDataBuff + stat.posCaret.qwOffset);
 	if (stat.posCaret.bTextSection) {
 		byNew = (BYTE)wParam;
 	} else {
@@ -1608,11 +1667,11 @@ LRESULT HexEditWnd::HEHandleWM_CHAR(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 			op != NULL &&
 			op->type == op_modify &&
 			(!bSavePointValid || current != savepoint) &&
-			op->dwOffset == stat.posCaret.dwOffset) {
+			op->qwOffset == stat.posCaret.qwOffset) {
 			op = current->getOper();
 			op->newData[0] 	= byNew;
 		} else {
-			op = new HE_OPER(op_modify, stat.posCaret.dwOffset, 1, 1);
+			op = new HE_OPER(op_modify, stat.posCaret.qwOffset, 1, 1);
 			op->newData[0] 	= byNew;
 			op->oldData[0] 	= byOld;
 			AddOper(op);
@@ -1623,10 +1682,10 @@ LRESULT HexEditWnd::HEHandleWM_CHAR(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 
 	// reset caret
 	if (stat.posCaret.bTextSection) {
-		++stat.posCaret.dwOffset;
+		++stat.posCaret.qwOffset;
 	} else {
 		if (!hiWord) {
-			++stat.posCaret.dwOffset;
+			++stat.posCaret.qwOffset;
 			stat.posCaret.bHiword = TRUE;
 		} else {
 			stat.posCaret.bHiword = FALSE;
@@ -1676,7 +1735,8 @@ void HexEditWnd::ConfigureTB() {
 	SendMessage(hTB, TB_CHANGEBITMAP, TB_INSERT, bEnabled ? 22 : 23);
 
 	// offset type button
-	if (!file_type((char *)diData.pDataBuff)) {
+	if (!diData.pDataBuff || diData.qwSize < sizeof(IMAGE_DOS_HEADER) ||
+		!file_type((char *)diData.pDataBuff)) {
 		SendMessage(hTB, TB_CHANGEBITMAP, TB_OFFSET, 29);
 		SendMessage(hTB, TB_SETSTATE, TB_OFFSET, FALSE);
 	} else {
@@ -1737,37 +1797,41 @@ BOOL HexEditWnd::CanCopy() {
 }
 
 BOOL HexEditWnd::CanPaste() {
-	BOOL	bRet;
-	PHE_CLIPBOARD_DATA   pcbd;
+	PHE_CLIPBOARD_DATA   pcbd = NULL;
+	BOOL	bRet = FALSE;
 
 	if (IsReadOnly() || !IsClipboardFormatOK()) {
 		return FALSE;
 	}
 
-	if (!IsResizingAllowed()) {
-		OpenClipboard(hMainWnd);
-		pcbd = GetClipboardData();
-		if (!pcbd) {
-			CloseClipboard();
+	if (IsResizingAllowed()) {
+		return TRUE;
+	}
+
+	if (!OpenClipboard(hMainWnd))
+		return FALSE;
+	pcbd = GetClipboardData();
+	// GetClipboardData already closes clipboard internally; ensure closed
+	// (CloseClipboard is safe to call even if already closed? Guard.)
+	// Note: GetClipboardData opens/closes itself, so don't double-close here.
+	if (!pcbd) {
+		return FALSE;
+	}
+	if (stat.bSel) {
+		if (stat.qwOffSelEnd - stat.qwOffSelStart + 1 == pcbd->qwDataSize) {
+			bRet = TRUE;
+		} else {
 			bRet = FALSE;
 		}
-		CloseClipboard();
-		if (stat.bSel) {
-			if (stat.dwOffSelEnd - stat.dwOffSelStart + 1 != pcbd->dwDataSize) {
-				bRet = FALSE;
-			} else {
-				bRet = TRUE;
-			}
+	} else {
+		if (bInsert) {
+			bRet = FALSE;
 		} else {
-			if (bInsert) {
-				bRet = FALSE;
-			} else {
-				bRet = TRUE;
-			}
+			bRet = TRUE;
 		}
 	}
 
-	if (!pcbd) {
+	if (pcbd) {
 		free(pcbd);
 	}
 
@@ -1785,7 +1849,7 @@ BOOL HexEditWnd::SaveChanges() {
 	RepaintClientAreaNow();
 
 	if (fInput.OpenFileForSave()) {
-		fInput.SetMapPtrSize(diData.pDataBuff, diData.dwSize);
+		fInput.SetMapPtrSize(diData.pDataBuff, diData.qwSize);
 		fInput.FlushFileMap();
 		fInput.SetMapPtrSize(NULL, 0);
 		fInput.Destroy();
@@ -1804,7 +1868,7 @@ BOOL HexEditWnd::SaveChanges() {
 void HexEditWnd::SetHEWndCaption() {
 	char cCaption[400];
 
-	if (!diOrgData.dwSize)
+	if (!diOrgData.qwSize)
 		SetWindowText(hMainWnd, HEDIT_WND_TITLE);
 
 	lstrcpy(cCaption, HEDIT_WND_TITLE);
@@ -1828,12 +1892,12 @@ BOOL HexEditWnd::IsReadOnly() {
 	return diOrgData.bReadOnly || bReadOnly;
 }
 
-BOOL HexEditWnd::SetSelection(DWORD dwOffStart, DWORD dwOffEnd) {
-	if (IsOutOfRange(dwOffStart) || IsOutOfRange(dwOffEnd))
+BOOL HexEditWnd::SetSelection(ULONGLONG qwOffStart, ULONGLONG qwOffEnd) {
+	if (IsOutOfRange(qwOffStart) || IsOutOfRange(qwOffEnd))
 		return FALSE;
 
-	stat.dwOffSelStart   = __min(dwOffStart, dwOffEnd);
-	stat.dwOffSelEnd     = __max(dwOffStart, dwOffEnd);
+	stat.qwOffSelStart   = __min(qwOffStart, qwOffEnd);
+	stat.qwOffSelEnd     = __max(qwOffStart, qwOffEnd);
 	stat.bSel            = TRUE;
 
 	if (stat.bCaretVisible) {
@@ -1841,12 +1905,12 @@ BOOL HexEditWnd::SetSelection(DWORD dwOffStart, DWORD dwOffEnd) {
 		stat.bCaretVisible = FALSE;
 	}
 
-	if (dwOffEnd > dwOffStart) {
+	if (qwOffEnd > qwOffStart) {
 		stat.posCaret.bHiword       = FALSE;
-		stat.posCaret.dwOffset      = dwOffEnd;
+		stat.posCaret.qwOffset      = qwOffEnd;
 	} else {
 		stat.posCaret.bHiword   = TRUE;
-		stat.posCaret.dwOffset  = dwOffEnd;
+		stat.posCaret.qwOffset  = qwOffEnd;
 	}
 
 	if (!stat.bCaretPosValid) {
@@ -1898,9 +1962,9 @@ BOOL HexEditWnd::Point2Selection(LPPOINT ppClient)
 	// mouse moved since last button down ?
 	pposLast = &stat.posLastLButtonDown;
 	if (pos.bTextSection == pposLast->bTextSection) {
-		if ((pos.dwOffset != pposLast->dwOffset) ||
-			((pos.dwOffset == pposLast->dwOffset) && pos.bHiword != pposLast->bHiword)) {
-			SetSelection(pposLast->dwOffset, pos.dwOffset);
+		if ((pos.qwOffset != pposLast->qwOffset) ||
+			((pos.qwOffset == pposLast->qwOffset) && pos.bHiword != pposLast->bHiword)) {
+			SetSelection(pposLast->qwOffset, pos.qwOffset);
 			return TRUE;
 		}
 	}
@@ -1920,7 +1984,7 @@ BOOL HexEditWnd::MouseMoveSelect(LPPOINT pos) {
 		&& stat.bMouseSelecting)
 		if ((DWORD)poi.y > iyHETop + uMaxLines*uFontHeight) { // under ?
 			// scroll down
-			stat.posCaret.dwOffset += 2*16;
+			stat.posCaret.qwOffset += 2*16;
 			ValidatePos( &stat.posCaret );
 			MakeCaretVisible();
 
@@ -1934,7 +1998,7 @@ BOOL HexEditWnd::MouseMoveSelect(LPPOINT pos) {
 			}
 		} else if ((DWORD)poi.y < iyHETop) { // over ?
 			// scroll up
-			stat.posCaret.dwOffset -= 2*16;
+			stat.posCaret.qwOffset -= 2*16;
 			ValidatePos( &stat.posCaret );
 			MakeCaretVisible();
 
@@ -1975,21 +2039,21 @@ BOOL HexEditWnd::HEHandleWM_MOUSEMOVE(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 	return MouseMoveSelect(&poi);
 }
 
-UINT HexEditWnd::GetCurrentLine() {
-	return(UINT)(stat.dwCurOffset / 16);
+ULONGLONG HexEditWnd::GetCurrentLine() {
+	return stat.qwCurOffset / 16;
 }
 
 //
 // same as "SetTopLine" but fails if "iLine" is invalid
 //
-BOOL HexEditWnd::SetCurrentLine(UINT iLine)
+BOOL HexEditWnd::SetCurrentLine(ULONGLONG qwLine)
 {
-	if ((int)iLine < 0)
-		return FALSE; // ERR
-	if (iLine > GetTotalLineNum())
+	if (qwLine > GetTotalLineNum())
 		return FALSE; // ERR
 
-	SetTopLine((int)iLine);
+	if (qwLine > (ULONGLONG)INT_MAX)
+		return FALSE; // ERR - beyond scrollbar range
+	SetTopLine((int)qwLine);
 
 	return TRUE;
 }
@@ -1998,15 +2062,21 @@ BOOL HexEditWnd::SetCurrentLine(UINT iLine)
 // returns:
 // whether sth was fixed
 //
-BOOL HexEditWnd::ValidateLine(int *piLine)
+BOOL HexEditWnd::ValidateLine(LONGLONG *pllLine)
 {
-	int iLastLine = GetTotalLineNum();
+	LONGLONG llLastLine = (LONGLONG)GetTotalLineNum();
+	if (llLastLine > 0)
+		llLastLine -= 1;
+	else
+		llLastLine = 0;
+	if (llLastLine > INT_MAX)
+		llLastLine = INT_MAX;
 
-	if (*piLine < 0) {
-		*piLine = 0;
+	if (*pllLine < 0) {
+		*pllLine = 0;
 		return TRUE; // OK
-	} else if (*piLine > iLastLine) {
-		*piLine = iLastLine;
+	} else if (*pllLine > llLastLine) {
+		*pllLine = llLastLine;
 		return TRUE; // OK
 	} else
 		return FALSE; // ERR
@@ -2039,22 +2109,31 @@ BOOL HexEditWnd::SetHEWnd2Top(BOOL bTop)
 	return bBefore; 
 }
 
-BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
-	DWORD   dwCurOff;
+BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset) {
+	ULONGLONG qwCurOff;
 	BYTE*   pby;
 	BOOL    bFound;
 
 	if (!pso->bInited)
 		return FALSE;
 
-	dwCurOff = pso->dwStartOff;
+	if (pso->qwStr == 0 || pso->qwStr > diData.qwSize)
+		return FALSE;
+
+	qwCurOff = pso->qwStartOff;
+	if (qwCurOff >= diData.qwSize)
+		qwCurOff = diData.qwSize - 1;
 
 	// correct a too big off (when up search)
 	if (!pso->bDown &&
-		diData.dwSize - dwCurOff < pso->dwcStr)
-		dwCurOff = diData.dwSize - pso->dwcStr;
+		diData.qwSize - qwCurOff < pso->qwStr)
+	{
+		if (diData.qwSize < pso->qwStr)
+			return FALSE;
+		qwCurOff = diData.qwSize - pso->qwStr;
+	}
 
-	pby      = (BYTE*)((DWORD)diData.pDataBuff + dwCurOff);
+	pby      = diData.pDataBuff + qwCurOff;
 	bFound   = FALSE;
 
 	if (pso->bASCIIStr || pso->bWideCharStr) {
@@ -2065,41 +2144,45 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
 			if ( pso->bASCIIStr ) {
 				// ascii
 				if (pso->bDown)	// ...down
-					while (dwCurOff + pso->dwcStr <= diData.dwSize) {
-						if (!strnicmp((PCSTR)pso->pData, (PCSTR)pby, pso->dwcStr)) {
+					while (qwCurOff + pso->qwStr <= diData.qwSize) {
+						if (!strnicmp((PCSTR)pso->pData, (PCSTR)pby, (SIZE_T)pso->qwStr)) {
 							bFound = TRUE;
 							break;
 						}
-						++dwCurOff;
+						++qwCurOff;
 						++pby;
 					}
 				else // ...up
-					while (dwCurOff != (DWORD)-1) {
-						if (!strnicmp((PCSTR)pso->pData, (PCSTR)pby, pso->dwcStr)) {
+					while (qwCurOff != (ULONGLONG)-1) {
+						if (!strnicmp((PCSTR)pso->pData, (PCSTR)pby, (SIZE_T)pso->qwStr)) {
 							bFound = TRUE;
 							break;
 						}
-						--dwCurOff;
+						if (qwCurOff == 0)
+							break;
+						--qwCurOff;
 						--pby;
 					}
 			} else {
 				// unicode
 				if (pso->bDown)	// ...down
-					while (dwCurOff + pso->dwcStr <= diData.dwSize) {
-						if ( !wcsnicmp((LPWSTR)pso->pData, (LPWSTR)pby, pso->dwcStr/2) ) {
+					while (qwCurOff + pso->qwStr <= diData.qwSize) {
+						if ( !wcsnicmp((LPWSTR)pso->pData, (LPWSTR)pby, (SIZE_T)(pso->qwStr/2)) ) {
 							bFound = TRUE;
 							break;
 						}
-						++dwCurOff;
+						++qwCurOff;
 						++pby;
 					}
 				else // ...up
-					while (dwCurOff != (DWORD)-1) {
-						if ( !wcsnicmp((LPWSTR)pso->pData, (LPWSTR)pby, pso->dwcStr/2) ) {
+					while (qwCurOff != (ULONGLONG)-1) {
+						if ( !wcsnicmp((LPWSTR)pso->pData, (LPWSTR)pby, (SIZE_T)(pso->qwStr/2)) ) {
 							bFound = TRUE;
 							break;
 						}
-						--dwCurOff;
+						if (qwCurOff == 0)
+							break;
+						--qwCurOff;
 						--pby;
 					}
 			}
@@ -2109,21 +2192,23 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
 		//
 		else {
 			if (pso->bDown)	// ..down
-				while (dwCurOff + pso->dwcStr <= diData.dwSize) {
-					if (!memcmp(pso->pData, pby, pso->dwcStr)) {
+				while (qwCurOff + pso->qwStr <= diData.qwSize) {
+					if (!memcmp(pso->pData, pby, (SIZE_T)pso->qwStr)) {
 						bFound = TRUE;
 						break;
 					}
-					++dwCurOff;
+					++qwCurOff;
 					++pby;
 				}
 			else // ...up
-				while (dwCurOff != -1) {
-					if (!memcmp(pso->pData, pby, pso->dwcStr)) {
+				while (qwCurOff != (ULONGLONG)-1) {
+					if (!memcmp(pso->pData, pby, (SIZE_T)pso->qwStr)) {
 						bFound = TRUE;
 						break;
 					}
-					--dwCurOff;
+					if (qwCurOff == 0)
+						break;
+					--qwCurOff;
 					--pby;
 				}
 		}
@@ -2132,25 +2217,23 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
 		// byte search
 		//
 		if (pso->bDown)	// ...down
-			while (dwCurOff + pso->dwcStr <= diData.dwSize) {
-				if (!memcmp(pso->pData, pby, pso->dwcStr)) {
+			while (qwCurOff + pso->qwStr <= diData.qwSize) {
+				if (!memcmp(pso->pData, pby, (SIZE_T)pso->qwStr)) {
 					bFound = TRUE;
 					break;
 				}
-				++dwCurOff;
+				++qwCurOff;
 				++pby;
 			}
 		else
-			while (dwCurOff != -1) {
-				if (dwCurOff == 0x10)
-#ifdef _M_IX86
-					__asm NOP
-#endif
-					if (!memcmp(pso->pData, pby, pso->dwcStr)) {
+			while (qwCurOff != (ULONGLONG)-1) {
+					if (!memcmp(pso->pData, pby, (SIZE_T)pso->qwStr)) {
 						bFound = TRUE;
 						break;
 					}
-				--dwCurOff;
+				if (qwCurOff == 0)
+					break;
+				--qwCurOff;
 				--pby;
 			}
 
@@ -2158,7 +2241,7 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
 
 	if (bFound) {
 		if (pOffset != NULL) {
-			*pOffset = dwCurOff;
+			*pOffset = qwCurOff;
 		}
 	}
 	return bFound;
@@ -2172,18 +2255,18 @@ BOOL HexEditWnd::Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset) {
 //
 //#pragma optimize("", off)
 BOOL HexEditWnd::PerformStrSearch(PHE_SEARCHOPTIONS pso) {
-	DWORD   dwCurOff;
+	ULONGLONG   qwCurOff;
 	BOOL    bFound;
 
 	SetStatusInfo("Searching...");
 	//KillSelection();
 	RepaintClientAreaNow();
-	bFound = Search(pso, &dwCurOff);
+	bFound = Search(pso, &qwCurOff);
 
 	if (bFound) {
-		SetSelection(dwCurOff, dwCurOff + pso->dwcStr - 1);
-		if (!IsOffsetVisible(dwCurOff))
-			SetTopLine(dwCurOff);
+		SetSelection(qwCurOff, qwCurOff + pso->qwStr - 1);
+		if (!IsOffsetVisible(qwCurOff))
+			SetTopLine(qwCurOff);
 		SetStatusInfo("Found!");
 	} else {
 		SetStatusInfo(pso->bDown ? "Buffer end reached." : "Buffer start reached.");
@@ -2206,14 +2289,23 @@ BOOL HexEditWnd::PerformSearchAgain(PHE_SEARCHOPTIONS pso, BOOL bDown) {
 
 	if (bDown) {
 		if (stat.bSel)
-			pso->dwStartOff = stat.dwOffSelEnd + 1;
+		{
+			if (stat.qwOffSelEnd + 1 < stat.qwOffSelEnd)
+				return FALSE; // overflow (file near 2^64, unrealistic)
+			pso->qwStartOff = stat.qwOffSelEnd + 1;
+		}
 		else
-			pso->dwStartOff	= stat.posCaret.dwOffset;
+			pso->qwStartOff	= stat.posCaret.qwOffset;
 	} else {
 		if (stat.bSel)
-			pso->dwStartOff = stat.dwOffSelStart - 1;
+		{
+			if (stat.qwOffSelStart == 0)
+				pso->qwStartOff = 0;
+			else
+				pso->qwStartOff = stat.qwOffSelStart - 1;
+		}
 		else
-			pso->dwStartOff	= stat.posCaret.dwOffset;
+			pso->qwStartOff	= stat.posCaret.qwOffset;
 	}
 	pso->bDown = bDown;
 
@@ -2221,10 +2313,10 @@ BOOL HexEditWnd::PerformSearchAgain(PHE_SEARCHOPTIONS pso, BOOL bDown) {
 }
 
 BOOL HexEditWnd::PerformStrReplace(PHE_SEARCHOPTIONS pso) {
-	DWORD   dwCurOff;
+	ULONGLONG   qwCurOff;
 	BOOL    bFound;
 
-	if (IsReadOnly() || (pso->dwcStr != pso->dwcReplaceStr && !IsResizingAllowed())) {
+	if (IsReadOnly() || (pso->qwStr != pso->qwReplaceStr && !IsResizingAllowed())) {
 		SetStatusInfo("Readonly or not sizable!");
 		RepaintClientArea();
 		return FALSE;
@@ -2235,23 +2327,23 @@ BOOL HexEditWnd::PerformStrReplace(PHE_SEARCHOPTIONS pso) {
 	 */
 	if (pso->bDown) {
 		if (stat.bSel)
-			pso->dwStartOff = stat.dwOffSelStart;
+			pso->qwStartOff = stat.qwOffSelStart;
 	} else {
 		if (stat.bSel)
-			pso->dwStartOff = stat.dwOffSelEnd;
+			pso->qwStartOff = stat.qwOffSelEnd;
 	}
 
-	bFound = Search(pso, &dwCurOff);
+	bFound = Search(pso, &qwCurOff);
 	if (bFound) {
-		HE_OPER *op = new HE_OPER(op_paste, dwCurOff, pso->dwcStr, pso->dwcReplaceStr);
-		memcpy(op->oldData, (BYTE*)diData.pDataBuff + dwCurOff, pso->dwcStr);
-		if (pso->dwcReplaceStr > 0) {
-			memcpy(op->newData, pso->pReplaceData, pso->dwcReplaceStr);
+		HE_OPER *op = new HE_OPER(op_paste, qwCurOff, pso->qwStr, pso->qwReplaceStr);
+		memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
+		if (pso->qwReplaceStr > 0) {
+			memcpy(op->newData, pso->pReplaceData, (SIZE_T)pso->qwReplaceStr);
 		}
 		AddOper(op);
 		ApplyOper(op);
-		if (!IsOffsetVisible(dwCurOff))
-			SetTopLine(dwCurOff);
+		if (!IsOffsetVisible(qwCurOff))
+			SetTopLine(qwCurOff);
 		SetStatusInfo("Repalced!");
 	} else {
 		SetStatusInfo("Not found!");
@@ -2264,35 +2356,35 @@ BOOL HexEditWnd::PerformStrReplace(PHE_SEARCHOPTIONS pso) {
 }
 
 BOOL HexEditWnd::PerformStrReplaceAll(PHE_SEARCHOPTIONS pso) {
-	DWORD   dwCurOff;
+	ULONGLONG   qwCurOff;
 	BOOL    bFound;
 	int		count;
 
-	if (IsReadOnly() || (pso->dwcStr != pso->dwcReplaceStr && !IsResizingAllowed())) {
+	if (IsReadOnly() || (pso->qwStr != pso->qwReplaceStr && !IsResizingAllowed())) {
 		SetStatusInfo("Readonly or not sizable!");
 		return FALSE;
 	}
 
-	pso->dwStartOff = 0;
+	pso->qwStartOff = 0;
 	pso->bDown = TRUE;
 
 	count = 0;
 	while (TRUE) {
-		bFound = Search(pso, &dwCurOff);
+		bFound = Search(pso, &qwCurOff);
 		if (!bFound) {
 			break;
 		}
 		count++;
-		HE_OPER *op = new HE_OPER(op_paste, dwCurOff, pso->dwcStr, pso->dwcReplaceStr);
-		memcpy(op->oldData, (BYTE*)diData.pDataBuff + dwCurOff, pso->dwcStr);
-		if (pso->dwcReplaceStr > 0) {
-			memcpy(op->newData, pso->pReplaceData, pso->dwcReplaceStr);
+		HE_OPER *op = new HE_OPER(op_paste, qwCurOff, pso->qwStr, pso->qwReplaceStr);
+		memcpy(op->oldData, diData.pDataBuff + qwCurOff, (SIZE_T)pso->qwStr);
+		if (pso->qwReplaceStr > 0) {
+			memcpy(op->newData, pso->pReplaceData, (SIZE_T)pso->qwReplaceStr);
 		}
 		AddOper(op);
 		ApplyOper(op);
-		if (!IsOffsetVisible(dwCurOff))
-			SetTopLine(dwCurOff);
-		pso->dwStartOff = dwCurOff + pso->dwcStr;
+		if (!IsOffsetVisible(qwCurOff))
+			SetTopLine(qwCurOff);
+		pso->qwStartOff = qwCurOff + pso->qwStr;
 	}
 
 	if (count > 0) {
@@ -2309,18 +2401,23 @@ BOOL HexEditWnd::PerformStrReplaceAll(PHE_SEARCHOPTIONS pso) {
 BOOL HexEditWnd::CopySelectedBlockAsText() {
 	HANDLE               hMem;
 	void                 *pMem;
-	int 				 dwc;
+	ULONGLONG 			 qwCount;
 
 	if (!CanCopy()) return FALSE;
 	return TRUE;
 
-	dwc = stat.dwOffSelEnd - stat.dwOffSelStart + 1;
+	qwCount = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
+	if (qwCount > (ULONGLONG)(SIZE_MAX) - 1)
+	{
+		ErrMsg(STR_NO_MEM);
+		return FALSE;
+	}
 	if (!OpenClipboard(NULL)) {
 		ErrMsg("Couldn't open clipboard!");
 		return FALSE;
 	}
 
-	hMem = GlobalAlloc(GHND | GMEM_SHARE, dwc + 1);
+	hMem = GlobalAlloc(GHND | GMEM_SHARE, (SIZE_T)qwCount + 1);
 	if (!hMem) {
 		CloseClipboard();
 		ErrMsg(STR_NO_MEM);
@@ -2328,8 +2425,8 @@ BOOL HexEditWnd::CopySelectedBlockAsText() {
 	}
 
 	pMem = GlobalLock(hMem);
-	memcpy(pMem, (void*)((DWORD)diData.pDataBuff + stat.dwOffSelStart), dwc);
-	((char *)pMem)[dwc] = 0;
+	memcpy(pMem, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwCount);
+	((char *)pMem)[(SIZE_T)qwCount] = 0;
 	GlobalUnlock(hMem);
 
 	if (!SetClipboardData(CF_TEXT, hMem)) {
@@ -2349,25 +2446,31 @@ BOOL HexEditWnd::CopySelectedBlock()
 	HANDLE               hMem;
 	void                 *pMem;
 	PHE_CLIPBOARD_DATA   pcbd;
-	DWORD                dwc;
+	ULONGLONG            qwCount;
 
 	if (!CanCopy()) return FALSE;
 
-	dwc = stat.dwOffSelEnd - stat.dwOffSelStart + 1;
+	qwCount = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
+	if (qwCount > (ULONGLONG)(SIZE_MAX) - 1 ||
+		qwCount + sizeof(ULONGLONG) < qwCount)
+	{
+		ErrMsg(STR_NO_MEM);
+		return FALSE;
+	}
 	if (!OpenClipboard(NULL)) {
 		ErrMsg("Couldn't open clipboard!");
 		return FALSE;
 	}
 
-	hMem = GlobalAlloc(GHND | GMEM_SHARE, dwc + 1);
+	hMem = GlobalAlloc(GHND | GMEM_SHARE, (SIZE_T)qwCount + 1);
 	if (!hMem) {
 		CloseClipboard();
 		ErrMsg(STR_NO_MEM);
 		return FALSE;
 	}
 	pMem = GlobalLock(hMem);
-	memcpy(pMem, (void*)((DWORD)diData.pDataBuff + stat.dwOffSelStart), dwc);
-	((char *)pMem)[dwc] = 0;
+	memcpy(pMem, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwCount);
+	((char *)pMem)[(SIZE_T)qwCount] = 0;
 	GlobalUnlock(hMem);
 
     EmptyClipboard();
@@ -2378,7 +2481,7 @@ BOOL HexEditWnd::CopySelectedBlock()
 		return FALSE;
 	}
 
-	hMem  = GlobalAlloc(GHND | GMEM_SHARE, 4 + dwc);
+	hMem  = GlobalAlloc(GHND | GMEM_SHARE, sizeof(ULONGLONG) + (SIZE_T)qwCount);
 	if (!hMem) {
 		CloseClipboard();
 		ErrMsg(STR_NO_MEM);
@@ -2388,9 +2491,9 @@ BOOL HexEditWnd::CopySelectedBlock()
 	pcbd = (PHE_CLIPBOARD_DATA)pMem;
 	memcpy(
 		  &pcbd->byDataStart,
-		  (void*)((DWORD)diData.pDataBuff + stat.dwOffSelStart),
-		  dwc);
-	pcbd->dwDataSize = dwc;
+		  diData.pDataBuff + stat.qwOffSelStart,
+		  (SIZE_T)qwCount);
+	pcbd->qwDataSize = qwCount;
 	GlobalUnlock(hMem);
 
 	if (!SetClipboardData(cf16Edit, hMem)) {
@@ -2408,10 +2511,10 @@ BOOL HexEditWnd::CopySelectedBlock()
 BOOL HexEditWnd::DeleteSelectedBlock() {
 	if (!CanCut()) return FALSE;
 
-	DWORD sellen = stat.dwOffSelEnd - stat.dwOffSelStart + 1;
+	ULONGLONG qwSelLen = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
 
-	HE_OPER *op = new HE_OPER(op_cut, stat.dwOffSelStart, sellen, 0);
-	memcpy(op->oldData, (BYTE *)diData.pDataBuff + stat.dwOffSelStart, sellen);
+	HE_OPER *op = new HE_OPER(op_cut, stat.qwOffSelStart, qwSelLen, 0);
+	memcpy(op->oldData, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwSelLen);
 	AddOper(op);
 	ApplyOper(op);
 
@@ -2456,22 +2559,22 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 	CloseClipboard();
 
 
-	DWORD oldlen, dwOffset;
+	ULONGLONG qwOldLen, qwOffset;
 	if (stat.bSel) {
-		oldlen = stat.dwOffSelEnd - stat.dwOffSelStart + 1;
-		dwOffset = stat.dwOffSelStart;
+		qwOldLen = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
+		qwOffset = stat.qwOffSelStart;
 		KillSelection();
 	} else {
 		if (bInsert) {
-			oldlen = 0;
+			qwOldLen = 0;
 		} else {
-			oldlen = pcbd->dwDataSize;
+			qwOldLen = pcbd->qwDataSize;
 		}
-		dwOffset = stat.posCaret.dwOffset;
+		qwOffset = stat.posCaret.qwOffset;
 	}
 
-	if (oldlen == pcbd->dwDataSize) {
-		if (!memcmp((BYTE*)diData.pDataBuff + dwOffset, &pcbd->byDataStart, oldlen)) {
+	if (qwOldLen == pcbd->qwDataSize) {
+		if (!memcmp(diData.pDataBuff + qwOffset, &pcbd->byDataStart, (SIZE_T)qwOldLen)) {
 			if (pcbd) {
 				free(pcbd);
 			}
@@ -2479,12 +2582,12 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 		}
 	}
 
-	HE_OPER *op = new HE_OPER(op_paste, dwOffset, oldlen, pcbd->dwDataSize);
-	if (oldlen > 0) {
-		memcpy(op->oldData, (BYTE*)diData.pDataBuff + dwOffset, oldlen);
+	HE_OPER *op = new HE_OPER(op_paste, qwOffset, qwOldLen, pcbd->qwDataSize);
+	if (qwOldLen > 0) {
+		memcpy(op->oldData, diData.pDataBuff + qwOffset, (SIZE_T)qwOldLen);
 	}
 
-	memcpy(op->newData, &pcbd->byDataStart, pcbd->dwDataSize);
+	memcpy(op->newData, &pcbd->byDataStart, (SIZE_T)pcbd->qwDataSize);
 	AddOper(op);
 	ApplyOper(op);
 
@@ -2493,7 +2596,7 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 	//
 	ConfigureTB();
 	SetupVScrollbar();
-	if (!IsOffsetVisible( stat.posCaret.dwOffset ) )
+	if (!IsOffsetVisible( stat.posCaret.qwOffset ) )
 		SetTopLine();
 	RepaintClientArea();
 
@@ -2517,7 +2620,7 @@ BOOL HexEditWnd::UndoChanges() {
 	SetCaret();
 	ConfigureTB();
 	SetupVScrollbar();
-	if (!IsOffsetVisible( stat.posCaret.dwOffset ) )
+	if (!IsOffsetVisible( stat.posCaret.qwOffset ) )
 		SetTopLine();
 	RepaintClientArea();
 
@@ -2537,7 +2640,7 @@ BOOL HexEditWnd::RedoChanges() {
 	SetCaret();
 	ConfigureTB();
 	SetupVScrollbar();
-	if (!IsOffsetVisible( stat.posCaret.dwOffset ) )
+	if (!IsOffsetVisible( stat.posCaret.qwOffset ) )
 		SetTopLine();
 	RepaintClientArea();
 
@@ -2589,41 +2692,68 @@ void HexEditWnd::ApplyOper(HE_OPER *op) {
 	HE_POS posNew;
 
 	memcpy(&posNew, &stat.posCaret, sizeof(HE_POS));
-	posNew.dwOffset = op->dwOffset;
+	posNew.qwOffset = op->qwOffset;
 	posNew.bHiword      = TRUE;
 	switch (op->type) {
 		case op_modify:
-			((BYTE *)(diData.pDataBuff))[op->dwOffset] = op->newData[0];
+			((BYTE *)(diData.pDataBuff))[op->qwOffset] = op->newData[0];
 			break;
 		case op_cut:
-		   	if (diData.dwSize > op->dwOffset + op->dwOldLen)
+		   	if (diData.qwSize > op->qwOffset + op->qwOldLen)
 				MEMCPY(
-				  (BYTE*)diData.pDataBuff + op->dwOffset,
-				  (BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen,
-				  diData.dwSize - op->dwOffset - op->dwOldLen);
-			diData.dwSize -= op->dwOldLen;
-			diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize);
+				  (BYTE*)diData.pDataBuff + op->qwOffset,
+				  (BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen,
+				  (SIZE_T)(diData.qwSize - op->qwOffset - op->qwOldLen));
+			diData.qwSize -= op->qwOldLen;
+			if (diData.qwSize == 0)
+			{
+				free(diData.pDataBuff);
+				diData.pDataBuff = NULL;
+			}
+			else
+			{
+				BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)diData.qwSize);
+				if (pNew)
+					diData.pDataBuff = pNew;
+			}
 			KillSelection();
 			break;
 		case op_paste:
-			if (op->dwNewLen > op->dwOldLen) {
-				diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize + op->dwNewLen - op->dwOldLen);
+			if (op->qwNewLen > op->qwOldLen) {
+				ULONGLONG qwNewSize = diData.qwSize + op->qwNewLen - op->qwOldLen;
+				BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)qwNewSize);
+				if (!pNew)
+				{
+					ErrMsg("Not enough memory available !");
+					break;
+				}
+				diData.pDataBuff = pNew;
 				MEMCPY(
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwNewLen, 
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen, 
-					diData.dwSize - op->dwOffset - op->dwOldLen
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwNewLen, 
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen, 
+					(SIZE_T)(diData.qwSize - op->qwOffset - op->qwOldLen)
 					);
-				diData.dwSize += op->dwNewLen - op->dwOldLen;
-			} else if (op->dwOldLen > op->dwNewLen) {
+				diData.qwSize = qwNewSize;
+			} else if (op->qwOldLen > op->qwNewLen) {
 				MEMCPY(
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwNewLen,
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen, 
-					diData.dwSize - op->dwOffset - op->dwOldLen
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwNewLen,
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen, 
+					(SIZE_T)(diData.qwSize - op->qwOffset - op->qwOldLen)
 					);
-				diData.dwSize -= op->dwOldLen - op->dwNewLen;
-				diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize);
+				diData.qwSize -= op->qwOldLen - op->qwNewLen;
+				if (diData.qwSize == 0)
+				{
+					free(diData.pDataBuff);
+					diData.pDataBuff = NULL;
+				}
+				else
+				{
+					BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)diData.qwSize);
+					if (pNew)
+						diData.pDataBuff = pNew;
+				}
 			}
-			memcpy((BYTE*)diData.pDataBuff + op->dwOffset, op->newData, op->dwNewLen);
+			memcpy((BYTE*)diData.pDataBuff + op->qwOffset, op->newData, (SIZE_T)op->qwNewLen);
 			break;
 	}
 	SetCaret(&posNew);
@@ -2633,47 +2763,73 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 	HE_POS posNew;
 
 	memcpy(&posNew, &stat.posCaret, sizeof(HE_POS));
-	posNew.dwOffset = op->dwOffset;
+	posNew.qwOffset = op->qwOffset;
 	posNew.bHiword      = TRUE;
 	switch (op->type) {
 		case op_modify:
-			((BYTE *)(diData.pDataBuff))[op->dwOffset] = op->oldData[0];
+			((BYTE *)(diData.pDataBuff))[op->qwOffset] = op->oldData[0];
 			break;
 		case op_cut:
-			diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize + op->dwOldLen);
-			if (diData.dwSize - 1 > op->dwOffset) {
-				MEMCPY(
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen,
-					(BYTE*)diData.pDataBuff + op->dwOffset,
-					diData.dwSize - op->dwOffset
-					  );
+			{
+				ULONGLONG qwNewSize = diData.qwSize + op->qwOldLen;
+				BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)qwNewSize);
+				if (!pNew)
+				{
+					ErrMsg("Not enough memory available !");
+					break;
+				}
+				diData.pDataBuff = pNew;
+				if (diData.qwSize > op->qwOffset) {
+					MEMCPY(
+						(BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen,
+						(BYTE*)diData.pDataBuff + op->qwOffset,
+						(SIZE_T)(diData.qwSize - op->qwOffset)
+						  );
+				}
+				memcpy((BYTE*)diData.pDataBuff + op->qwOffset, op->oldData, (SIZE_T)op->qwOldLen);
+				diData.qwSize = qwNewSize;
 			}
-			memcpy((BYTE*)diData.pDataBuff + op->dwOffset, op->oldData, op->dwOldLen);
-			diData.dwSize += op->dwOldLen;
 
-			SetSelection(op->dwOffset, op->dwOffset + op->dwOldLen - 1);
+			SetSelection(op->qwOffset, op->qwOffset + op->qwOldLen - 1);
 			break;
 		case op_paste:
-			if (op->dwNewLen > op->dwOldLen) {
+			if (op->qwNewLen > op->qwOldLen) {
 				MEMCPY(
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen, 
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwNewLen, 
-					diData.dwSize - op->dwOffset - op->dwNewLen
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen, 
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwNewLen, 
+					(SIZE_T)(diData.qwSize - op->qwOffset - op->qwNewLen)
 					);
-				diData.dwSize -= op->dwNewLen - op->dwOldLen;
-				diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize);
-			} else if (op->dwOldLen > op->dwNewLen) {
-				diData.pDataBuff = (BYTE*)realloc(diData.pDataBuff, diData.dwSize + op->dwOldLen - op->dwNewLen);
+				diData.qwSize -= op->qwNewLen - op->qwOldLen;
+				if (diData.qwSize == 0)
+				{
+					free(diData.pDataBuff);
+					diData.pDataBuff = NULL;
+				}
+				else
+				{
+					BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)diData.qwSize);
+					if (pNew)
+						diData.pDataBuff = pNew;
+				}
+			} else if (op->qwOldLen > op->qwNewLen) {
+				ULONGLONG qwNewSize = diData.qwSize + op->qwOldLen - op->qwNewLen;
+				BYTE *pNew = (BYTE*)realloc(diData.pDataBuff, (SIZE_T)qwNewSize);
+				if (!pNew)
+				{
+					ErrMsg("Not enough memory available !");
+					break;
+				}
+				diData.pDataBuff = pNew;
 				MEMCPY(
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwOldLen,
-					(BYTE*)diData.pDataBuff + op->dwOffset + op->dwNewLen, 
-					diData.dwSize - op->dwOffset - op->dwNewLen
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwOldLen,
+					(BYTE*)diData.pDataBuff + op->qwOffset + op->qwNewLen, 
+					(SIZE_T)(diData.qwSize - op->qwOffset - op->qwNewLen)
 					);
-				diData.dwSize += op->dwOldLen - op->dwNewLen;
+				diData.qwSize = qwNewSize;
 			}
 
-			if (op->dwOldLen > 0) {
-				memcpy((BYTE*)diData.pDataBuff + op->dwOffset, op->oldData, op->dwOldLen);
+			if (op->qwOldLen > 0) {
+				memcpy((BYTE*)diData.pDataBuff + op->qwOffset, op->oldData, (SIZE_T)op->qwOldLen);
 			}
 			break;
 	}
@@ -2681,27 +2837,31 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 }
 
 void HexEditWnd::SelectAll() {
+	if (diData.qwSize == 0)
+		return;
 	if (IsAllSelected()) {
 		KillSelection();
 		SetCaret();
 	} else {
-		SetSelection(0, diData.dwSize - 1);
+		SetSelection(0, diData.qwSize - 1);
 	}
 
 	return;
 }
 
 BOOL HexEditWnd::IsAllSelected() {
+	if (diData.qwSize == 0)
+		return FALSE;
 	return(stat.bSel &&
-		   stat.dwOffSelStart == 0 &&
-		   stat.dwOffSelEnd == diData.dwSize - 1) ? TRUE : FALSE;
+		   stat.qwOffSelStart == 0 &&
+		   stat.qwOffSelEnd == diData.qwSize - 1) ? TRUE : FALSE;
 }
 
 BOOL HexEditWnd::IsResizingAllowed() {
 	return bResizingAllowed;
 }
 
-BOOL HexEditWnd::DoSpecifySettings(char *filename, int start, int len) {
+BOOL HexEditWnd::DoSpecifySettings(char *filename, ULONGLONG start, ULONGLONG len) {
 	InitEdition();
 	if (!DoEditFile(filename, FALSE)) {
 		return FALSE;
@@ -2711,10 +2871,13 @@ BOOL HexEditWnd::DoSpecifySettings(char *filename, int start, int len) {
 	bMinToTray       = FALSE;
 	bSaveWinPos      = TRUE;
 	bReadOnly = diOrgData.bReadOnly;
-	if (start > 0) {
-		SetSelection(start, start + len - 1);
-		stat.dwCurOffset = start;
-		stat.posCaret.dwOffset = start;
+	if (diData.qwSize > 0 && start < diData.qwSize) {
+		ULONGLONG qwEnd = start + (len > 0 ? len - 1 : 0);
+		if (qwEnd >= diData.qwSize)
+			qwEnd = diData.qwSize - 1;
+		SetSelection(start, qwEnd);
+		stat.qwCurOffset = start;
+		stat.posCaret.qwOffset = start;
 	}
 
 	return TRUE;
@@ -2813,18 +2976,24 @@ void HexEditWnd::SetStatusText(char *szFormat, ...) {
 
 void HexEditWnd::SetStatusText() {
 	char	msg[256];
-	DWORD	dwOffset;
+	char	szOS[24], szNS[24], szFO[24], szVA[24];
+	ULONGLONG	qwOffset;
 
 	if (stat.bSel)
-		dwOffset = stat.dwOffSelStart;
+		qwOffset = stat.qwOffSelStart;
 	else if (stat.bCaretPosValid)
-		dwOffset = stat.posCaret.dwOffset;
+		qwOffset = stat.posCaret.qwOffset;
 	else
-		dwOffset = 0;
+		qwOffset = 0;
 
-	wsprintf(msg, "OS:0x%04X | NS:0x%04X | FO:0x%04X", dwOldSize,diData.dwSize,dwOffset);
-	if (file_type((char *)diData.pDataBuff)) {
-		wsprintf(msg, "%s | VA:0x%08X", msg, GetVirtualAddress(dwOffset));
+	FormatOffset64(szOS, qwOldSize);
+	FormatOffset64(szNS, diData.qwSize);
+	FormatOffset64(szFO, qwOffset);
+	wsprintf(msg, "OS:0x%s | NS:0x%s | FO:0x%s", szOS, szNS, szFO);
+	if (diData.pDataBuff && diData.qwSize >= sizeof(IMAGE_DOS_HEADER) &&
+		file_type((char *)diData.pDataBuff)) {
+		FormatOffset64(szVA, GetVirtualAddress(qwOffset));
+		wsprintf(msg, "%s | VA:0x%s", msg, szVA);
 	}
 
 	SetStatusText(msg);
@@ -2868,30 +3037,35 @@ void HexEditWnd::ShowAbout() {
 	return;
 }
 
-BOOL HexEditWnd::IsDBCSFirstByte(DWORD dwOffset) {
+BOOL HexEditWnd::IsDBCSFirstByte(ULONGLONG qwOffset) {
 	BYTE byCur;
-	int i;
+	LONGLONG ll;
 
-	byCur = *((BYTE*)diData.pDataBuff + dwOffset);
+	if (qwOffset >= diData.qwSize)
+		return FALSE;
+
+	byCur = *(diData.pDataBuff + qwOffset);
 	if (!IsDBCSLeadByte(byCur)) {
 		return FALSE;
 	}
 
-	for (i = dwOffset - 1; i >= 0; i--) {
-		byCur = *((BYTE*)diData.pDataBuff + i);
+	for (ll = (LONGLONG)qwOffset - 1; ll >= 0; ll--) {
+		byCur = *(diData.pDataBuff + (ULONGLONG)ll);
 		if (!IsDBCSLeadByte(byCur)) {
-			if ((dwOffset - i)%2) {
+			if ((qwOffset - (ULONGLONG)ll)%2) {
 				return TRUE;
 			} else {
 				return FALSE;
 			}
 		}
+		if (ll == 0)
+			break;
 	}
 
 	//
 	// every byte before are dbcs lead byte
 	//
-	if (dwOffset%2) {
+	if (qwOffset%2) {
 		return FALSE;
 	} else {
 		return TRUE;
@@ -2906,7 +3080,7 @@ BOOL HexEditWnd::IsDBCSFirstByte(DWORD dwOffset) {
 // 1 : modify
 // 2 : add
 // 3 : add & modify
-int	HexEditWnd::GetDataStatus(DWORD dwOffset) {
+int	HexEditWnd::GetDataStatus(ULONGLONG qwOffset) {
 	int status = 0;
 	EditOperList *oplist;
 	HE_OPER *op;
@@ -2922,24 +3096,24 @@ int	HexEditWnd::GetDataStatus(DWORD dwOffset) {
 
 			switch (op->type) {
 				case op_modify:
-					if (dwOffset == op->dwOffset) {
+					if (qwOffset == op->qwOffset) {
 						status |= 1;
 					}
 					break;
 				case op_paste:
-					if (dwOffset >= op->dwOffset) {
-						if (op->dwNewLen > op->dwOldLen) {
-							if (dwOffset >= op->dwOffset + op->dwNewLen) {
-								dwOffset -= op->dwNewLen - op->dwOldLen;
-							} else if (dwOffset < op->dwOffset + op->dwOldLen) {
+					if (qwOffset >= op->qwOffset) {
+						if (op->qwNewLen > op->qwOldLen) {
+							if (qwOffset >= op->qwOffset + op->qwNewLen) {
+								qwOffset -= op->qwNewLen - op->qwOldLen;
+							} else if (qwOffset < op->qwOffset + op->qwOldLen) {
 								status |= 1;
 							} else {
 								status |= 2;
 								return status;
 							}
 						} else {
-							if (dwOffset >= op->dwOffset + op->dwNewLen) {
-								dwOffset += op->dwOldLen - op->dwNewLen;
+							if (qwOffset >= op->qwOffset + op->qwNewLen) {
+								qwOffset += op->qwOldLen - op->qwNewLen;
 							} else {
 								status |= 1;
 							}
@@ -2947,11 +3121,11 @@ int	HexEditWnd::GetDataStatus(DWORD dwOffset) {
 					}
 					break;
 				case op_cut:
-					if (dwOffset >= op->dwOffset) {
-						if (status & 2 && dwOffset < op->dwOffset + op->dwOldLen) {
+					if (qwOffset >= op->qwOffset) {
+						if (status & 2 && qwOffset < op->qwOffset + op->qwOldLen) {
 							status = 1;
 						}
-						dwOffset += op->dwOldLen;
+						qwOffset += op->qwOldLen;
 					}
 					break;
 			}
@@ -2964,24 +3138,24 @@ int	HexEditWnd::GetDataStatus(DWORD dwOffset) {
 
 			switch (op->type) {
 				case op_modify:
-					if (dwOffset == op->dwOffset) {
+					if (qwOffset == op->qwOffset) {
 						status |= 1;
 					}
 					break;
 				case op_paste:
-					if (dwOffset >= op->dwOffset) {
-						if (op->dwOldLen > op->dwNewLen) {
-							if (dwOffset >= op->dwOffset + op->dwOldLen) {
-								dwOffset -= op->dwOldLen - op->dwNewLen;
-							} else if (dwOffset < op->dwOffset + op->dwNewLen) {
+					if (qwOffset >= op->qwOffset) {
+						if (op->qwOldLen > op->qwNewLen) {
+							if (qwOffset >= op->qwOffset + op->qwOldLen) {
+								qwOffset -= op->qwOldLen - op->qwNewLen;
+							} else if (qwOffset < op->qwOffset + op->qwNewLen) {
 								status |= 1;
 							} else {
 								status |= 2;
 								return status;
 							}
 						} else {
-							if (dwOffset >= op->dwOffset + op->dwOldLen) {
-								dwOffset += op->dwNewLen - op->dwOldLen;
+							if (qwOffset >= op->qwOffset + op->qwOldLen) {
+								qwOffset += op->qwNewLen - op->qwOldLen;
 							} else {
 								status |= 1;
 							}
@@ -2989,11 +3163,11 @@ int	HexEditWnd::GetDataStatus(DWORD dwOffset) {
 					}
 					break;
 				case op_cut:
-					if (dwOffset >= op->dwOffset && dwOffset < op->dwOffset + op->dwOldLen) {
+					if (qwOffset >= op->qwOffset && qwOffset < op->qwOffset + op->qwOldLen) {
 						status |= 2;
 						return status;
-					} else if (dwOffset >= op->dwOffset + op->dwOldLen) {
-						dwOffset -= op->dwOldLen;
+					} else if (qwOffset >= op->qwOffset + op->qwOldLen) {
+						qwOffset -= op->qwOldLen;
 					}
 					break;
 			}
@@ -3026,7 +3200,7 @@ BOOL HexEditWnd::HEditToTray() {
 	nidTray.hWnd              = hMainWnd;
 	nidTray.uID               = ID_TRAYICON;
 	nidTray.uFlags            = NIF_TIP | NIF_ICON | NIF_MESSAGE;
-	nidTray.hIcon             = (HICON)GetClassLong(hMainWnd, GCL_HICON);
+	nidTray.hIcon             = (HICON)GetClassLongPtr(hMainWnd, GCLP_HICON);
 	nidTray.uCallbackMessage  = WM_TRAYMENU;
 	if (!Shell_NotifyIcon(NIM_ADD, &nidTray))
 		return FALSE;
@@ -3054,28 +3228,43 @@ BOOL HexEditWnd::IsClipboardFormatOK() {
 }
 
 PHE_CLIPBOARD_DATA HexEditWnd::GetClipboardData() {
-	PHE_CLIPBOARD_DATA	pcbd;
+	PHE_CLIPBOARD_DATA	pcbd = NULL;
 
-	OpenClipboard(hMainWnd);
+	if (!OpenClipboard(hMainWnd))
+		return NULL;
 	if (IsClipboardFormatAvailable(cf16Edit)) {
 		PHE_CLIPBOARD_DATA	pcbdold;
-		int		len;
+		ULONGLONG	qwLen;
 
 		pcbdold = (PHE_CLIPBOARD_DATA)::GetClipboardData(cf16Edit);
-		len = pcbdold->dwDataSize;
-		pcbd = (PHE_CLIPBOARD_DATA)malloc(len + 4);
-		pcbd->dwDataSize = len;
-		memcpy(&pcbd->byDataStart, &pcbdold->byDataStart, len);
+		if (pcbdold) {
+			qwLen = pcbdold->qwDataSize;
+			if (qwLen <= (ULONGLONG)(SIZE_MAX) - sizeof(ULONGLONG))
+			{
+				pcbd = (PHE_CLIPBOARD_DATA)malloc((SIZE_T)qwLen + sizeof(ULONGLONG));
+				if (pcbd)
+				{
+					pcbd->qwDataSize = qwLen;
+					memcpy(&pcbd->byDataStart, &pcbdold->byDataStart, (SIZE_T)qwLen);
+				}
+			}
+		}
 	} else if (IsClipboardFormatAvailable(CF_TEXT)) {
 		char	*pData;
-		int		len;
+		SIZE_T	len;
 
 		pData = (char *)::GetClipboardData(CF_TEXT);
 		if(pData) {
 			len = strlen(pData);
-			pcbd = (PHE_CLIPBOARD_DATA)malloc(len + 4);
-			pcbd->dwDataSize = len;
-			memcpy(&pcbd->byDataStart, pData, len);
+			if (len <= SIZE_MAX - sizeof(ULONGLONG))
+			{
+				pcbd = (PHE_CLIPBOARD_DATA)malloc(len + sizeof(ULONGLONG));
+				if (pcbd)
+				{
+					pcbd->qwDataSize = (ULONGLONG)len;
+					memcpy(&pcbd->byDataStart, pData, len);
+				}
+			}
 		}
 	}
 	CloseClipboard();

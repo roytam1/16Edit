@@ -32,7 +32,7 @@ void RestoreFromProfile(HWND hWnd, char *key) {
 	for (; *p != 0; p++) {
 		if (*p == ',') {
 			*p = 0;
-			SendMessage(hWnd, CB_ADDSTRING, 0, (LONG)(VOID *)last);
+			SendMessage(hWnd, CB_ADDSTRING, 0, (LPARAM)(LPSTR)last);
 			last = p+1;
 		}
 	}
@@ -45,15 +45,15 @@ void SaveToProfile(HWND hWnd, char *key) {
 	buff[0] = 0;
 
 	int total = 0;
-	SendMessage(hWnd, WM_GETTEXT, sizeof(item), (LONG)(VOID *)item);
+	SendMessage(hWnd, WM_GETTEXT, sizeof(item), (LPARAM)(LPSTR)item);
 	strcat(buff, item);
 	strcat(buff, ",");
 	strcpy(items[total++], item);
 
-	int count = SendMessage(hWnd, CB_GETCOUNT, 0, 0);
+	int count = (int)SendMessage(hWnd, CB_GETCOUNT, 0, 0);
 
 	for (int i = 0; i < count; i++) {
-		SendMessage(hWnd, CB_GETLBTEXT, i, (LONG)(VOID *)item);
+		SendMessage(hWnd, CB_GETLBTEXT, i, (LPARAM)(LPSTR)item);
 		int same = 0;
 		for (int j = 0; j < total; j++) {
 			if (strcmp(items[j], item) == 0) {
@@ -346,17 +346,17 @@ void HexEditWnd::InitSelBlockDlg(HWND hDlg) {
 	HookHexEditbox( GetDlgItem(hDlg, SB_END) );
 	HookHexEditbox( GetDlgItem(hDlg, SB_SIZE) );
 
-	// limit text len
-	SendDlgItemMessage(hDlg, SB_START, EM_SETLIMITTEXT, 8, 0);
-	SendDlgItemMessage(hDlg, SB_END, EM_SETLIMITTEXT, 8, 0);
-	SendDlgItemMessage(hDlg, SB_SIZE, EM_SETLIMITTEXT, 8, 0);
+	// limit text len: 16 hex digits for 64-bit offsets (files >4GB need 9+)
+	SendDlgItemMessage(hDlg, SB_START, EM_SETLIMITTEXT, 16, 0);
+	SendDlgItemMessage(hDlg, SB_END, EM_SETLIMITTEXT, 16, 0);
+	SendDlgItemMessage(hDlg, SB_SIZE, EM_SETLIMITTEXT, 16, 0);
 
 	return;
 }
 
 BOOL HexEditWnd::SBHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-	DWORD  dwStart, dwEnd;
-	char   cBuff[9];
+	ULONGLONG  qwStart, qwEnd;
+	char   cBuff[32];
 	BOOL   b;
 	HWND   hESize, hEEnd;
 
@@ -367,28 +367,28 @@ BOOL HexEditWnd::SBHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		if (HIWORD(wParam) != NM_HEXEDITENTER)
 			return FALSE;
 	case SB_OK:
-		// get numbers
+		// get numbers (64-bit for files >4GB)
 		GetDlgItemText(hDlg, SB_START, cBuff, sizeof(cBuff));
-		HexStrToInt(cBuff, &dwStart);
+		HexStrToInt64(cBuff, &qwStart);
 
 		if (IsDlgButtonChecked(hDlg, SB_RADIOEND)) {
 			GetDlgItemText(hDlg, SB_END, cBuff, sizeof(cBuff));
-			HexStrToInt(cBuff, &dwEnd);
+			HexStrToInt64(cBuff, &qwEnd);
 		} else {
 			GetDlgItemText(hDlg, SB_SIZE, cBuff, sizeof(cBuff));
-			HexStrToInt(cBuff, &dwEnd);
-			if (dwEnd != 0)
-				--dwEnd;
-			dwEnd += dwStart;
+			HexStrToInt64(cBuff, &qwEnd);
+			if (qwEnd != 0)
+				--qwEnd;
+			qwEnd += qwStart;
 		}
 
 		// valid?
-		if (IsOutOfRange(dwEnd) ||
-			IsOutOfRange(dwStart))
+		if (IsOutOfRange(qwEnd) ||
+			IsOutOfRange(qwStart))
 			ErrMsg(hDlg, "Out of range !");
 		else {
-			SetTopLine( (DWORD)__min(dwStart, dwEnd) );
-			SetSelection(dwStart, dwEnd);
+			SetTopLine(__min(qwStart, qwEnd));
+			SetSelection(qwStart, qwEnd);
 			SendMessage(hDlg, WM_CLOSE, 0, 0);
 		}
 		return TRUE;
@@ -416,7 +416,7 @@ BOOL HexEditWnd::SBHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 
 void HexEditWnd::SSInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	HWND   hCur;
-	char   cBuff[9];
+	char   cBuff[32];
 
 	// setup str edit box
 	HookEditboxEnter( GetDlgItem(hDlg, SS_STR) );
@@ -427,7 +427,7 @@ void HexEditWnd::SSInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	// setup offset edit box
 	hCur = GetDlgItem(hDlg, SS_OFFSET);
 	HookHexEditbox(hCur);
-	SendMessage(hCur, EM_SETLIMITTEXT, 8, 0);
+	SendMessage(hCur, EM_SETLIMITTEXT, 16, 0);
 
 	if (search.bInited) {
 		//
@@ -470,7 +470,7 @@ void HexEditWnd::SSInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 			// ...
 
 		default: // 2 and eventually 1
-			wsprintf(cBuff, H8, search.dwStartOff);
+			FormatOffset64(cBuff, search.qwStartOff);
 			SetDlgItemText(hDlg, SS_OFFSET, cBuff);
 			CheckDlgButton(hDlg, SS_SEARCHFROMOFF, TRUE);           
 			break;
@@ -502,12 +502,12 @@ void HexEditWnd::SSInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 void HexEditWnd::ReplaceInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	HWND   hCur;
-	char   cBuff[9];
+	char   cBuff[32];
 
 	// setup offset edit box
 	hCur = GetDlgItem(hDlg, SS_OFFSET);
 	HookHexEditbox(hCur);
-	SendMessage(hCur, EM_SETLIMITTEXT, 8, 0);
+	SendMessage(hCur, EM_SETLIMITTEXT, 16, 0);
 
 	RestoreFromProfile(GetDlgItem(hDlg, SS_STR), INI_SEARCH_STRING);
 	SendDlgItemMessage(hDlg, SS_STR, CB_SETCURSEL, 0, 0);
@@ -559,7 +559,7 @@ void HexEditWnd::ReplaceInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			// ...
 
 		default: // 2 and eventually 1
-			wsprintf(cBuff, H8, search.dwStartOff);
+			FormatOffset64(cBuff, search.qwStartOff);
 			SetDlgItemText(hDlg, SS_OFFSET, cBuff);
 			CheckDlgButton(hDlg, SS_SEARCHFROMOFF, TRUE);           
 			break;
@@ -587,7 +587,8 @@ void HexEditWnd::ReplaceInitDlg(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 BOOL HexEditWnd::SSHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	char  cBuff[20];
+	char  cBuff[32];
+	char  cOff[24];
 
 	switch (LOWORD(wParam)) {
 	case SS_STR:
@@ -632,8 +633,9 @@ BOOL HexEditWnd::SSHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 
 		// show current pos
 		if (LOWORD(wParam) == SS_SEARCHFROMCURPOS) {
-			// show current off
-			wsprintf(cBuff, "("_H8")", stat.posCaret.dwOffset);
+			// show current off (64-bit)
+			FormatOffset64(cOff, stat.posCaret.qwOffset);
+			wsprintf(cBuff, "(0x%s)", cOff);
 			SetDlgItemText(hDlg, SS_CUROFF, cBuff);
 		} else
 			SetDlgItemText(hDlg, SS_CUROFF, NULL);
@@ -657,7 +659,8 @@ BOOL HexEditWnd::SSHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 
 BOOL HexEditWnd::ReplaceHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	char  cBuff[20];
+	char  cBuff[32];
+	char  cOff[24];
 
 	switch (LOWORD(wParam)) {
 	case SS_REPLACE:
@@ -714,8 +717,9 @@ BOOL HexEditWnd::ReplaceHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LP
 
 		// show current pos
 		if (LOWORD(wParam) == SS_SEARCHFROMCURPOS) {
-			// show current off
-			wsprintf(cBuff, "("_H8")", stat.posCaret.dwOffset);
+			// show current off (64-bit)
+			FormatOffset64(cOff, stat.posCaret.qwOffset);
+			wsprintf(cBuff, "(0x%s)", cOff);
 			SetDlgItemText(hDlg, SS_CUROFF, cBuff);
 		} else
 			SetDlgItemText(hDlg, SS_CUROFF, NULL);
@@ -760,9 +764,9 @@ void HexEditWnd::SSEnableItems(HWND hDlg)
  * if the type == HEX_STRING and the string
  * cannot be converted, then return null
  */
-BYTE* GetConvertString(char *src, int type, DWORD *retlen = NULL) {
+BYTE* GetConvertString(char *src, int type, ULONGLONG *retlen = NULL) {
 	char *retstr = NULL;
-	int len;
+	SIZE_T len;
 
 	if (type == HEX_STRING) {
 		RemoveChar(src, ' ');
@@ -772,9 +776,9 @@ BYTE* GetConvertString(char *src, int type, DWORD *retlen = NULL) {
 
 			retstr = (char*)malloc(len + 1);
 			if (retlen != NULL) {
-				*retlen = len;
+				*retlen = (ULONGLONG)len;
 			}
-			for (int u = 0; u < len; u++) {
+			for (SIZE_T u = 0; u < len; u++) {
 				char cBuff[9];
 				DWORD dwByte;
 
@@ -791,11 +795,15 @@ BYTE* GetConvertString(char *src, int type, DWORD *retlen = NULL) {
 	} else if (type == UNI_STRING) {
 		len = strlen(src) + 1;
 		retstr = (char*)malloc(len * 2);
-		WideChar::SingleToWideCharStr(src, (PWSTR)retstr, len * 2);
+		WideChar::SingleToWideCharStr(src, (PWSTR)retstr, (int)(len * 2));
+		if (retlen != NULL)
+			*retlen = (ULONGLONG)(len * 2 - 2);
 	} else {
 		len = strlen(src) + 1;
 		retstr = (char*)malloc(len);
 		strcpy(retstr, src);
+		if (retlen != NULL)
+			*retlen = (ULONGLONG)(len - 1);
 	}
 	return (BYTE*)retstr;
 }
@@ -807,9 +815,10 @@ BOOL HexEditWnd::SSHandleSS_OK(HWND hDlg)
 {
 	HWND               hStrEdit;
 	HE_SEARCHOPTIONS   data, tmp;
-	DWORD              dwByte, dwOff;
+	DWORD              dwByte;
+	ULONGLONG          qwOff;
 	char               cBuff[64];
-	UINT               u;
+	ULONGLONG          qwIdx;
 	BOOL               bRet = FALSE;
 
 	ZERO(data);
@@ -820,44 +829,49 @@ BOOL HexEditWnd::SSHandleSS_OK(HWND hDlg)
 
 	// get info
 	hStrEdit = GetDlgItem(hDlg, SS_STR);
-	data.dwcStr           = GetWindowTextLength(hStrEdit);
+	data.qwStr           = (ULONGLONG)GetWindowTextLength(hStrEdit);
 	data.bASCIIStr        = IsDlgButtonChecked(hDlg, SS_SEARCHASCII);
 	data.bWideCharStr     = IsDlgButtonChecked(hDlg, SS_SEARCHUNICODE);
 	data.bCaseSensitive   = IsDlgButtonChecked(hDlg, SS_CASESENSITIVE);
 
 	// valid?
-	if (!data.dwcStr) {
+	if (!data.qwStr) {
 		ErrMsg(hDlg, "Please enter a search string !");
 		goto Exit; // ERR
 	}
 
 	// get search str data
-	data.dwcBuff = data.dwcStr + 1;
+	data.qwBuff = data.qwStr + 1;
 	if (data.bWideCharStr) {
-		data.dwcBuff *= 2;
-		data.dwcStr  *= 2;
+		data.qwBuff *= 2;
+		data.qwStr  *= 2;
 	}
-	data.pData   = (BYTE *)malloc(data.dwcBuff);
+	if (data.qwBuff > (ULONGLONG)(SIZE_MAX))
+	{
+		ErrMsg(hDlg, STR_NO_MEM);
+		goto Exit;
+	}
+	data.pData   = (BYTE *)malloc((SIZE_T)data.qwBuff);
 	if (!data.pData) {
 		ErrMsg(hDlg, STR_NO_MEM);
 		goto Exit; // ERR
 	}
 
 	// save entered str
-	data.pDlgStr = malloc(data.dwcStr + 1);
+	data.pDlgStr = malloc((SIZE_T)(data.qwStr + 1));
 	if (!data.pDlgStr) {
 		ErrMsg(hDlg, STR_NO_MEM);
 		goto Exit; // ERR
 	}
-	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pDlgStr, data.dwcStr + 1);
+	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pDlgStr, (int)(data.qwStr + 1));
 
 	// set search str data
-	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pData, data.dwcBuff);
+	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pData, (int)data.qwBuff);
 
 	if ( !(data.bASCIIStr || data.bWideCharStr)) {
 		RemoveChar((char *)data.pData, ' ');
-		data.dwcStr = lstrlen((const char*)data.pData);
-		if (data.dwcStr % 2) {
+		data.qwStr = (ULONGLONG)lstrlen((const char*)data.pData);
+		if (data.qwStr % 2) {
 			ErrMsg(hDlg, "Hex byte pairs have to result in an even number of digits !");
 			goto Exit; // ERR
 		}
@@ -865,14 +879,14 @@ BOOL HexEditWnd::SSHandleSS_OK(HWND hDlg)
 
 	if ( !(data.bASCIIStr || data.bWideCharStr) ) {
 		// ASCII -> bytes
-		data.dwcStr /= 2;
-		for (u = 0; u < data.dwcStr; u++) {
-			lstrcpyn(cBuff, (PSTR)((DWORD)data.pData + u * 2), 3);
+		data.qwStr /= 2;
+		for (qwIdx = 0; qwIdx < data.qwStr; qwIdx++) {
+			lstrcpyn(cBuff, (PSTR)(data.pData + qwIdx * 2), 3);
 			if (!HexStrToInt(cBuff, &dwByte)) {
 				ErrMsg(hDlg, "No hex string !");
 				goto Exit; // ERR
 			}
-			*(BYTE*)((DWORD)data.pData + u) = (BYTE)dwByte;
+			*(data.pData + qwIdx) = (BYTE)dwByte;
 		}
 
 	}
@@ -882,27 +896,27 @@ BOOL HexEditWnd::SSHandleSS_OK(HWND hDlg)
 		WideChar::SingleToWideCharStr(
 									 (PSTR)data.pData,
 									 (PWSTR)data.pData,
-									 data.dwcBuff);
+									 (int)data.qwBuff);
 
 	//
 	// handle location
 	//
 	if (IsDlgButtonChecked(hDlg, SS_SEARCHFROMCURPOS)) {
-		data.dwStartOff       = stat.posCaret.dwOffset;
+		data.qwStartOff       = stat.posCaret.qwOffset;
 		data.iDlgSearchFrom   = 1;
 	} else if (IsDlgButtonChecked(hDlg, SS_SEARCHFROMTOP)) {
-		data.dwStartOff      = 0;
+		data.qwStartOff      = 0;
 		data.iDlgSearchFrom  = 0;
 	} else {
 		data.iDlgSearchFrom = 2;
 
 		GetDlgItemText(hDlg, SS_OFFSET, cBuff, sizeof(cBuff));
-		HexStrToInt(cBuff, &dwOff);
-		if (IsOutOfRange(dwOff)) {
+		HexStrToInt64(cBuff, &qwOff);
+		if (IsOutOfRange(qwOff)) {
 			ErrMsg(hDlg, "Searching start offset is out of range !");
 			goto Exit; // ERR
 		}
-		data.dwStartOff = dwOff;
+		data.qwStartOff = qwOff;
 	}
 	data.bDown = IsDlgButtonChecked(hDlg, SS_DOWN);
 
@@ -923,7 +937,7 @@ BOOL HexEditWnd::SSHandleSS_OK(HWND hDlg)
 
 	search.pReplaceData	= tmp.pReplaceData;
 	search.pReplaceStr	= tmp.pReplaceStr;
-	search.dwcReplaceStr = tmp.dwcReplaceStr;
+	search.qwReplaceStr = tmp.qwReplaceStr;
 
 	search.bInited  = TRUE;
 
@@ -949,7 +963,7 @@ BOOL HexEditWnd::ReplaceHandleSS_OK(HWND hDlg)
 {
 	HWND               hStrEdit;
 	HE_SEARCHOPTIONS   data;
-	DWORD              dwOff;
+	ULONGLONG          qwOff;
 	char               cBuff[256];
 	BOOL               bRet = FALSE;
 	int				   type = HEX_STRING;
@@ -958,7 +972,7 @@ BOOL HexEditWnd::ReplaceHandleSS_OK(HWND hDlg)
 
 	// get info
 	hStrEdit = GetDlgItem(hDlg, SS_STR);
-	data.dwcStr           = GetWindowTextLength(hStrEdit);
+	data.qwStr           = (ULONGLONG)GetWindowTextLength(hStrEdit);
 	data.bASCIIStr        = IsDlgButtonChecked(hDlg, SS_SEARCHASCII);
 	data.bWideCharStr     = IsDlgButtonChecked(hDlg, SS_SEARCHUNICODE);
 	data.bCaseSensitive   = IsDlgButtonChecked(hDlg, SS_CASESENSITIVE);
@@ -969,39 +983,49 @@ BOOL HexEditWnd::ReplaceHandleSS_OK(HWND hDlg)
 		type = ASC_STRING;
 	}
 
-	if (!data.dwcStr) {
+	if (!data.qwStr) {
 		ErrMsg(hDlg, "Please enter a search string!");
 		goto Exit; // ERR
 	}
 
 	// get search str data
-	data.dwcBuff = data.dwcStr + 1;
+	data.qwBuff = data.qwStr + 1;
 	if (data.bWideCharStr) {
-		data.dwcBuff *= 2;
-		data.dwcStr  *= 2;
+		data.qwBuff *= 2;
+		data.qwStr  *= 2;
 	}
 
-	data.pDlgStr = malloc(data.dwcStr + 1);
-	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pDlgStr, data.dwcStr + 1);
+	data.pDlgStr = malloc((SIZE_T)(data.qwStr + 1));
+	if (!data.pDlgStr)
+	{
+		ErrMsg(hDlg, STR_NO_MEM);
+		goto Exit;
+	}
+	GetDlgItemText(hDlg, SS_STR, (PSTR)data.pDlgStr, (int)(data.qwStr + 1));
 
 	GetDlgItemText(hDlg, SS_STR, (PSTR)cBuff, sizeof(cBuff));
-	data.pData = GetConvertString(cBuff, type, &data.dwcStr);
+	data.pData = GetConvertString(cBuff, type, &data.qwStr);
 	if (data.pData == NULL) {
 		ErrMsg(hDlg, "Search string not hex string!");
 		goto Exit; // ERR
 	}
 
 	hStrEdit = GetDlgItem(hDlg, SS_STR2);
-	data.dwcReplaceStr    = GetWindowTextLength(hStrEdit);
-	if (data.dwcReplaceStr > 0) {
-		data.pReplaceStr = malloc(data.dwcReplaceStr + 1);
-		GetDlgItemText(hDlg, SS_STR2, (PSTR)data.pReplaceStr, data.dwcReplaceStr + 1);
+	data.qwReplaceStr    = (ULONGLONG)GetWindowTextLength(hStrEdit);
+	if (data.qwReplaceStr > 0) {
+		data.pReplaceStr = malloc((SIZE_T)(data.qwReplaceStr + 1));
+		if (!data.pReplaceStr)
+		{
+			ErrMsg(hDlg, STR_NO_MEM);
+			goto Exit;
+		}
+		GetDlgItemText(hDlg, SS_STR2, (PSTR)data.pReplaceStr, (int)(data.qwReplaceStr + 1));
 
 		if (data.bWideCharStr) {
-			data.dwcReplaceStr  *= 2;
+			data.qwReplaceStr  *= 2;
 		}
 		GetDlgItemText(hDlg, SS_STR2, (PSTR)cBuff, sizeof(cBuff));
-		data.pReplaceData = GetConvertString(cBuff, type, &data.dwcReplaceStr);
+		data.pReplaceData = GetConvertString(cBuff, type, &data.qwReplaceStr);
 		if (data.pReplaceData == NULL) {
 			ErrMsg(hDlg, "Replace string not hex string!");
 			goto Exit; // ERR
@@ -1015,29 +1039,35 @@ BOOL HexEditWnd::ReplaceHandleSS_OK(HWND hDlg)
 	if (IsDlgButtonChecked(hDlg, SS_SEARCHFROMCURPOS)) {
 		if (data.bDown) {
 			if (stat.bSel)
-				data.dwStartOff = stat.dwOffSelEnd + 1;
+				data.qwStartOff = stat.qwOffSelEnd + 1;
 			else
-				data.dwStartOff	= stat.posCaret.dwOffset;
+				data.qwStartOff	= stat.posCaret.qwOffset;
 		} else {
 			if (stat.bSel)
-				data.dwStartOff = stat.dwOffSelStart - 1;
+			{
+				// avoid ULONGLONG underflow when selection starts at 0 and searching up
+				if (stat.qwOffSelStart == 0)
+					data.qwStartOff = 0;
+				else
+					data.qwStartOff = stat.qwOffSelStart - 1;
+			}
 			else
-				data.dwStartOff	= stat.posCaret.dwOffset;
+				data.qwStartOff	= stat.posCaret.qwOffset;
 		}
 		data.iDlgSearchFrom   = 1;
 	} else if (IsDlgButtonChecked(hDlg, SS_SEARCHFROMTOP)) {
-		data.dwStartOff      = 0;
+		data.qwStartOff      = 0;
 		data.iDlgSearchFrom  = 0;
 	} else {
 		data.iDlgSearchFrom = 2;
 
 		GetDlgItemText(hDlg, SS_OFFSET, cBuff, sizeof(cBuff));
-		HexStrToInt(cBuff, &dwOff);
-		if (IsOutOfRange(dwOff)) {
+		HexStrToInt64(cBuff, &qwOff);
+		if (IsOutOfRange(qwOff)) {
 			ErrMsg(hDlg, "Searching start offset is out of range !");
 			goto Exit; // ERR
 		}
-		data.dwStartOff = dwOff;
+		data.qwStartOff = qwOff;
 	}
 
 	// free old buffers
@@ -1080,7 +1110,7 @@ BOOL HexEditWnd::ReplaceHandleSS_OK(HWND hDlg)
 void HexEditWnd::InitGotoDlg(HWND hDlg) {
 	HWND hWndOffset = GetWindow(GetDlgItem(hDlg, GO_OFFSET), GW_CHILD);
 	HookHexEditbox(hWndOffset);
-	SendMessage(hWndOffset, EM_SETLIMITTEXT, 8, 0);
+	SendMessage(hWndOffset, EM_SETLIMITTEXT, 16, 0);
 	RestoreFromProfile(GetDlgItem(hDlg, GO_OFFSET), INI_GO_OFFSET);
 
 	if (bFileOffset) {
@@ -1091,15 +1121,16 @@ void HexEditWnd::InitGotoDlg(HWND hDlg) {
 		CheckDlgButton(hDlg, IDC_FO, BST_UNCHECKED);
 	}
 
-	if (!file_type((char *)diData.pDataBuff)) {
+	if (!diData.pDataBuff || diData.qwSize < sizeof(IMAGE_DOS_HEADER) ||
+		!file_type((char *)diData.pDataBuff)) {
 		EnableWindow(GetDlgItem(hDlg, IDC_VA), FALSE);
 	}
 	return;
 }
 
 BOOL HexEditWnd::GDHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-	DWORD dwNewOff;
-	char  cBuff[9];
+	ULONGLONG qwNewOff;
+	char  cBuff[32];
 
 	switch (LOWORD(wParam)) {
 	case GO_OFFSET:
@@ -1108,17 +1139,17 @@ BOOL HexEditWnd::GDHandleWM_COMMAND(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 	case GO_OK:
 		SaveToProfile(GetDlgItem(hDlg, GO_OFFSET), INI_GO_OFFSET);
 
-		// get off
+		// get off (64-bit for files >4GB)
 		GetDlgItemText(hDlg, GO_OFFSET, cBuff, sizeof(cBuff));
-		HexStrToInt(cBuff, &dwNewOff);
+		HexStrToInt64(cBuff, &qwNewOff);
 
 		if (IsDlgButtonChecked(hDlg, IDC_VA)) {
-			dwNewOff = GetFileOffset(dwNewOff);
+			qwNewOff = GetFileOffset(qwNewOff);
 		}
 
-		if (!IsOutOfRange(dwNewOff)) {
+		if (!IsOutOfRange(qwNewOff)) {
 			KillSelection();
-			SetCaretPosData(dwNewOff);
+			SetCaretPosData(qwNewOff);
 			SendMessage(hDlg, WM_CLOSE, 1, 0);
 		} else
 			ErrMsg(hDlg, "Out of range !");

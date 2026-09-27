@@ -23,5 +23,6 @@ BOOL                  HookEditboxEnter(HWND hEdit);
 LRESULT FUNC_CALLBACK HexOnlyEditProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM lParam);
 LRESULT FUNC_CALLBACK EditHookEnterProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM lParam);
 BOOL                  HexStrToInt(char *szHexStr, DWORD *pdwHexVal);
+BOOL                  HexStrToInt64(char *szHexStr, ULONGLONG *pqwHexVal);
 
 #endif

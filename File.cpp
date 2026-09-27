@@ -1,10 +1,22 @@
 
 #include <malloc.h>
+#include <limits.h>
 #include "File.h"
+#include "Macros.h"
+
+// Chunk size for ReadFile/WriteFile loops (must fit in DWORD).
+// 1GB keeps each Win32 call well below the 4GB DWORD limit.
+#define CFILE_IO_CHUNK (0x40000000UL)
 
 CFile::CFile()
 {
-	Destroy();
+	// Initialize before Destroy() so Destroy() never reads
+	// uninitialized stack garbage (which would crash on free/CloseHandle).
+	hFile = INVALID_HANDLE_VALUE;
+	pMap = NULL;
+	qwMapSize = 0;
+	bReadOnly = FALSE;
+	cFilePath[0] = '\0';
 }
 
 CFile::~CFile()
@@ -126,7 +138,7 @@ BOOL CFile::Destroy()
 	// adjust variables
 	hFile        = INVALID_HANDLE_VALUE;
 	pMap         = NULL;
-	dwMapSize    = 0;
+	qwMapSize    = 0;
 
 	return bRet;
 }
@@ -147,22 +159,54 @@ BOOL CFile::IsFileReadOnly()
 
 BOOL CFile::MapFile()
 {
-	DWORD dw, dwFSize;
+	ULONGLONG qwFSize;
 
 	if (hFile == INVALID_HANDLE_VALUE)
 		return FALSE;
 
-	dwFSize = GetFSize();
+	qwFSize = GetFSize();
+	if (qwFSize == (ULONGLONG)-1)
+		return FALSE;
+
+	// malloc takes SIZE_T: fail cleanly if file doesn't fit in address space
+	// (e.g. >4GB file opened in a 32-bit build).
+	if (qwFSize > (ULONGLONG)(SIZE_MAX))
+		return FALSE;
+
+	if (qwFSize == 0)
+	{
+		// malloc(0) is implementation defined; keep a valid non-NULL marker
+		// so IsMapped()/GetMapSize() behave consistently for empty files.
+		pMap = malloc(1);
+		if (!pMap)
+			return FALSE;
+		qwMapSize = 0;
+		return TRUE;
+	}
 
 	// map file
-	pMap = malloc( dwFSize );
+	pMap = malloc((SIZE_T)qwFSize);
 	if (!pMap)
 		return FALSE;
-	if (!ReadFile(hFile, pMap, dwFSize, &dw, NULL))
+
+	// ReadFile takes a DWORD byte count, so loop for files >4GB.
+	if (!SetFPointer(0))
+	{
+		free(pMap);
+		pMap = NULL;
+		qwMapSize = 0;
 		return FALSE;
+	}
+	if (!Read(pMap, qwFSize))
+	{
+		free(pMap);
+		pMap = NULL;
+		qwMapSize = 0;
+		return FALSE;
+	}
 
 	// set vars
-	dwMapSize = dwFSize;
+	qwMapSize = qwFSize;
 
 	return TRUE;
 }
@@ -179,7 +223,7 @@ BOOL CFile::UnmapFile()
 
 	free(pMap);
 	pMap       = NULL;
-	dwMapSize  = 0;
+	qwMapSize  = 0;
 
 	return TRUE;
 }
@@ -187,32 +231,35 @@ BOOL CFile::UnmapFile()
 //
 // change size of file memory
 //
-BOOL CFile::ReMapFile(DWORD dwNewSize)
+BOOL CFile::ReMapFile(ULONGLONG qwNewSize)
 {
+	void *pNew;
+
 	if (!pMap)
 		return FALSE; // ERR
 
-	pMap = realloc(pMap, dwNewSize);
-	if (pMap)
-	{
-		pMap      = NULL;
-		dwMapSize = dwNewSize;
-		return TRUE; // OK
-	}
-	else
-		return FALSE; // ERR
+	if (qwNewSize > (ULONGLONG)(SIZE_MAX))
+		return FALSE; // ERR - doesn't fit in address space
+
+	pNew = realloc(pMap, (SIZE_T)qwNewSize);
+	if (!pNew && qwNewSize != 0)
+		return FALSE; // ERR - keep old pMap/qwMapSize intact
+
+	pMap      = pNew;
+	qwMapSize = qwNewSize;
+	return TRUE; // OK
 }
 
 //
 // returns:
-// -1 in the case of an error
+// (ULONGLONG)-1 in the case of an error
 //
-DWORD CFile::GetMapSize()
+ULONGLONG CFile::GetMapSize()
 {
 	if (!pMap)
-		return (DWORD)-1; // ERR
+		return (ULONGLONG)-1; // ERR
 
-	return dwMapSize;
+	return qwMapSize;
 }
 
 BOOL CFile::IsMapped()
@@ -228,19 +275,33 @@ BOOL CFile::FlushFileMap()
 	if ( !Truncate() )
 		return FALSE; // ERR
 
-	return Write(pMap, dwMapSize);
+	return Write(pMap, qwMapSize);
 }
 
 BOOL CFile::FileExits(char* szFilePath)
 {
-	CFile *f = new CFile;
+	CFile f;
 
-	return f->GetFileHandle(szFilePath, F_OPENEXISTING_R);
+	return f.GetFileHandle(szFilePath, F_OPENEXISTING_R);
 }
 
-DWORD CFile::GetFSize()
+ULONGLONG CFile::GetFSize()
 {
-	return GetFileSize(hFile, NULL);
+	DWORD dwLow, dwHigh;
+	DWORD dwErr;
+
+	if (hFile == INVALID_HANDLE_VALUE)
+		return (ULONGLONG)-1;
+
+	// Use GetFileSize with high DWORD so this builds on old SDKs (VC6)
+	// and works on old Windows, while still returning full 64-bit sizes >4GB.
+	SetLastError(NO_ERROR);
+	dwLow = GetFileSize(hFile, &dwHigh);
+	dwErr = GetLastError();
+	if (dwLow == (DWORD)-1 && dwErr != NO_ERROR)
+		return (ULONGLONG)-1;
+
+	return ((ULONGLONG)dwHigh << 32) | (ULONGLONG)dwLow;
 }
 	
 //
@@ -253,41 +314,83 @@ char* CFile::GetFilePath()
 }
 
 //
-// write to file
+// write to file (chunked so sizes >4GB work; WriteFile takes DWORD)
 //
-BOOL CFile::Write(void* pBuff, DWORD dwc)
+BOOL CFile::Write(void* pBuff, ULONGLONG qwCount)
 {
-	DWORD  dwRet;
-	BOOL   bRet;
+	BYTE *p = (BYTE*)pBuff;
+	ULONGLONG qwLeft = qwCount;
 
-	bRet = WriteFile(hFile, pBuff, dwc, &dwRet, NULL);
-	
-	return (bRet && dwc == dwRet) ? TRUE : FALSE;
+	if (hFile == INVALID_HANDLE_VALUE)
+		return FALSE;
+
+	// Writing 0 bytes is a no-op success (needed for empty files).
+	while (qwLeft > 0)
+	{
+		DWORD dwToWrite = (qwLeft > CFILE_IO_CHUNK) ? CFILE_IO_CHUNK : (DWORD)qwLeft;
+		DWORD dwWritten = 0;
+
+		if (!WriteFile(hFile, p, dwToWrite, &dwWritten, NULL))
+			return FALSE;
+		if (dwWritten != dwToWrite)
+			return FALSE;
+
+		p += dwWritten;
+		qwLeft -= dwWritten;
+	}
+
+	return TRUE;
 }
 
 //
-// read from file
+// read from file (chunked so sizes >4GB work; ReadFile takes DWORD)
 //
-BOOL CFile::Read(void* pBuff, DWORD dwc)
+BOOL CFile::Read(void* pBuff, ULONGLONG qwCount)
 {
-	DWORD  dwRet;
-	BOOL   bRet;
+	BYTE *p = (BYTE*)pBuff;
+	ULONGLONG qwLeft = qwCount;
 
-	bRet = ReadFile(hFile, pBuff, dwc, &dwRet, NULL);
-	
-	return (bRet && dwc == dwRet) ? TRUE : FALSE;
+	if (hFile == INVALID_HANDLE_VALUE)
+		return FALSE;
+
+	while (qwLeft > 0)
+	{
+		DWORD dwToRead = (qwLeft > CFILE_IO_CHUNK) ? CFILE_IO_CHUNK : (DWORD)qwLeft;
+		DWORD dwRead = 0;
+
+		if (!ReadFile(hFile, p, dwToRead, &dwRead, NULL))
+			return FALSE;
+		if (dwRead != dwToRead)
+			return FALSE;
+
+		p += dwRead;
+		qwLeft -= dwRead;
+	}
+
+	return TRUE;
 }
 
 //
-// set file pointer
+// set file pointer (64-bit via SetFilePointer with high DWORD;
+// works on old SDKs/Windows and supports offsets >4GB)
 //
-BOOL CFile::SetFPointer(DWORD dwOff)
+BOOL CFile::SetFPointer(ULONGLONG qwOff)
 {
+	LONG lLow, lHigh;
 	DWORD dwRet;
 
-	dwRet = SetFilePointer(hFile, dwOff, NULL, FILE_BEGIN);
+	if (hFile == INVALID_HANDLE_VALUE)
+		return FALSE;
 
-	return (dwRet != (DWORD)-1) ? TRUE : FALSE;
+	lLow = (LONG)(qwOff & 0xFFFFFFFFUL);
+	lHigh = (LONG)(qwOff >> 32);
+
+	SetLastError(NO_ERROR);
+	dwRet = SetFilePointer(hFile, lLow, &lHigh, FILE_BEGIN);
+	if (dwRet == (DWORD)-1 && GetLastError() != NO_ERROR)
+		return FALSE;
+
+	return TRUE;
 }
 
 BOOL CFile::Truncate()
@@ -300,10 +403,10 @@ BOOL CFile::Truncate()
 	return TRUE; // OK
 }
 
-void CFile::SetMapPtrSize(void* ptr, DWORD dwSize)
+void CFile::SetMapPtrSize(void* ptr, ULONGLONG qwSize)
 {
 	pMap      = ptr;
-	dwMapSize = dwSize;
+	qwMapSize = qwSize;
 
 	return;
 }

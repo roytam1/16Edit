@@ -47,21 +47,21 @@ public:
 	BOOL          MapFile();
 	void*         GetMapPtr();
 	BOOL          UnmapFile();
-	BOOL          ReMapFile(DWORD dwNewSize);
-	DWORD         GetMapSize();
+	BOOL          ReMapFile(ULONGLONG qwNewSize);
+	ULONGLONG     GetMapSize();
 	BOOL          IsMapped();
-	DWORD         GetFSize();
+	ULONGLONG     GetFSize();
 	BOOL          FlushFileMap();
 	static BOOL   FileExits(char* szFilePath);
 	char*         GetFilePath();
-	BOOL          Write(void* pBuff, DWORD dwc);
-	BOOL          Read(void* pBuff, DWORD dwc);
-	BOOL          SetFPointer(DWORD dwOff);
+	BOOL          Write(void* pBuff, ULONGLONG qwCount);
+	BOOL          Read(void* pBuff, ULONGLONG qwCount);
+	BOOL          SetFPointer(ULONGLONG qwOff);
 	BOOL          Truncate();
-	void          SetMapPtrSize(void* ptr, DWORD dwSize);
+	void          SetMapPtrSize(void* ptr, ULONGLONG qwSize);
 
 private:
-	DWORD         dwMapSize;
+	ULONGLONG     qwMapSize;
 	void          *pMap;
 	BOOL          bReadOnly;
 	HANDLE        hFile;

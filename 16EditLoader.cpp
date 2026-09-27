@@ -15,16 +15,25 @@ HexEditWnd HEdit;
 int main(int argc, char *argv[]) {
 	OFN          ofn;
 	char         *szCmdl;
-	int			 start = 0, len = 0;
+	ULONGLONG	 start = 0, len = 0;
 
 	if (argc > 1) {
 		szCmdl = argv[1];
 		if (argc > 2) {
-			start = atoi(argv[2]);
+#ifdef _MSC_VER
+			// VC6 has _atoi64 but not _strtoui64; use _atoi64 (signed 64-bit is enough for file offsets)
+			start = (ULONGLONG)_atoi64(argv[2]);
+#else
+			start = _strtoui64(argv[2], NULL, 0);
+#endif
 		}
 
 		if (argc > 3) {
-			len = atoi(argv[3]);
+#ifdef _MSC_VER
+			len = (ULONGLONG)_atoi64(argv[3]);
+#else
+			len = _strtoui64(argv[3], NULL, 0);
+#endif
 		}
 	} else {
 		if (!ofn.GetOpenFilePath())

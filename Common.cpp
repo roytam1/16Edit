@@ -26,10 +26,10 @@ BOOL UnHookHexEditbox(HWND hEdit) {
 	WNDCLASS  wc;
 	GetClassInfo(NULL, clsName, &wc);
 
-	if (SetWindowLong(
+	if (SetWindowLongPtr(
 		hEdit,
-		GWL_WNDPROC,
-		(DWORD)wc.lpfnWndProc))
+		GWLP_WNDPROC,
+		(LONG_PTR)wc.lpfnWndProc))
 		return TRUE;
 	else
 		return FALSE;
@@ -47,10 +47,10 @@ BOOL HookHexEditbox(HWND hEdit)
 		hEdit = GetWindow(hEdit, GW_CHILD);
 	}
 
-	if (SetWindowLong(
+	if (SetWindowLongPtr(
 		hEdit,
-		GWL_WNDPROC,
-		(DWORD)HexOnlyEditProc))
+		GWLP_WNDPROC,
+		(LONG_PTR)HexOnlyEditProc))
 		return TRUE;
 	else
 		return FALSE;
@@ -68,10 +68,10 @@ BOOL HookEditboxEnter(HWND hEdit)
 		hEdit = GetWindow(hEdit, GW_CHILD);
 	}
 
-	if (SetWindowLong(
+	if (SetWindowLongPtr(
 		hEdit,
-		GWL_WNDPROC,
-		(DWORD)EditHookEnterProc))
+		GWLP_WNDPROC,
+		(LONG_PTR)EditHookEnterProc))
 		return TRUE;
 	else
 		return FALSE;
@@ -92,23 +92,23 @@ LRESULT FUNC_CALLBACK HexOnlyEditProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM lP
 		// check whether the contents is a valid hex number string
 		if (OpenClipboard(hWnd))
 		{
-			int		len;
+			ULONGLONG	qwLen;
 			char	*pData;
 
 			if (IsClipboardFormatAvailable(cf16Edit)) {
 				PHE_CLIPBOARD_DATA	pcbd;
 
 				pcbd = (PHE_CLIPBOARD_DATA)::GetClipboardData(cf16Edit);
-				len = pcbd->dwDataSize;
+				qwLen = pcbd->qwDataSize;
 				pData = (char *)&pcbd->byDataStart;
 			} else if (IsClipboardFormatAvailable(CF_TEXT)) {
 				pData = (char *)::GetClipboardData(CF_TEXT);
-				len = strlen(pData);
+				qwLen = strlen(pData);
 			} else {
 				return 0;
 			}
 
-			for (int i = 0; i < len; i++) {
+			for (ULONGLONG i = 0; i < qwLen; i++) {
 				int ch1 = (pData[i] & 0xF0) >> 4;
 				int ch2 = (pData[i] & 0x0F);
 
@@ -222,23 +222,50 @@ LRESULT FUNC_CALLBACK EditHookEnterProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM 
 //
 BOOL HexStrToInt(char *szHexStr, DWORD *pdwHexVal)
 {
-	char   *pCH, c;
-	DWORD  dwVal = 0, dw;
+	ULONGLONG qwVal;
+
+	if (!HexStrToInt64(szHexStr, &qwVal))
+		return FALSE;
+	if (qwVal > (ULONGLONG)0xFFFFFFFFUL)
+		return FALSE; // out of 32-bit range
+
+	*pdwHexVal = (DWORD)qwVal;
+	return TRUE;
+}
+
+//
+// convert a hex number string to a 64-bit value (up to 16 hex digits).
+// Used for offsets/sizes so files >4GB (9+ hex digits) work.
+// Empty string yields 0 (preserves old HexStrToInt behaviour for callers
+// that treat empty as 0).
+//
+BOOL HexStrToInt64(char *szHexStr, ULONGLONG *pqwHexVal)
+{
+	char *pCH, c;
+	ULONGLONG qwVal = 0, qwDigit;
+	int nDigits = 0;
+
+	if (!szHexStr || !pqwHexVal)
+		return FALSE;
 
 	pCH = szHexStr;
 	while (*pCH)
 	{
 		c = toupper(*pCH++);
 		if (c >= 'A' && c <= 'F')
-			dw = (DWORD)c - ((DWORD)'A' - 10);
+			qwDigit = (ULONGLONG)c - ((ULONGLONG)'A' - 10);
 		else if (c >= '0' && c <= '9')
-			dw = (DWORD)c - (DWORD)'0';
+			qwDigit = (ULONGLONG)c - (ULONGLONG)'0';
 		else
 			return FALSE; // invalid hex char
-		dwVal = (dwVal << 4) + dw;
+		// overflow check: 16 hex digits max for 64-bit
+		if (nDigits >= 16)
+			return FALSE;
+		qwVal = (qwVal << 4) + qwDigit;
+		nDigits++;
 	}
 
-	*pdwHexVal = dwVal;
+	*pqwHexVal = qwVal;
 	return TRUE;
 }
 
@@ -276,9 +303,9 @@ DWORD file_type(char *base) {
 
 #define isin(address,start,length) ((address)>=(start) && (address)<(start)+(length))
 /*
- * Get the vitual offset from file offset
+ * Get the vitual offset from file offset (64-bit for files >4GB)
  */
-int get_va(char *base, DWORD file_offset) {
+ULONGLONG get_va(char *base, ULONGLONG file_offset) {
 	IMAGE_DOS_HEADER *dos_head = (IMAGE_DOS_HEADER *)base;
 	IMAGE_NT_HEADERS *header;
 	IMAGE_SECTION_HEADER *section_header;
@@ -289,22 +316,22 @@ int get_va(char *base, DWORD file_offset) {
 		((char *)header + header->FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4); 
 		sect < header->FileHeader.NumberOfSections; sect++, section_header++) {
 		if (isin(file_offset, section_header->PointerToRawData, section_header->SizeOfRawData)) {
-			return section_header->VirtualAddress + 
-				file_offset - section_header->PointerToRawData + header->OptionalHeader.ImageBase;
+			return (ULONGLONG)section_header->VirtualAddress + 
+				file_offset - (ULONGLONG)section_header->PointerToRawData + header->OptionalHeader.ImageBase;
 		}
 	}
 	return file_offset;
 }
 
 /*
- * Get the file offset from vitual offset
+ * Get the file offset from vitual offset (64-bit for files >4GB)
  */
-int get_fo(char *base, DWORD va_offset) {
+ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
 	IMAGE_DOS_HEADER *dos_head = (IMAGE_DOS_HEADER *)base;
 	IMAGE_NT_HEADERS *header;
 	IMAGE_SECTION_HEADER *section_header;
 	int   sect;
-	DWORD	va;
+	ULONGLONG	va;
 
 	header = (IMAGE_NT_HEADERS *)((char *)dos_head + dos_head->e_lfanew);
 	va = va_offset - header->OptionalHeader.ImageBase;
@@ -313,7 +340,7 @@ int get_fo(char *base, DWORD va_offset) {
 		((char *)header + header->FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4); 
 		sect < header->FileHeader.NumberOfSections; sect++, section_header++) {
 		if (isin(va, section_header->VirtualAddress, section_header->SizeOfRawData)) {
-			return section_header->PointerToRawData + va - section_header->VirtualAddress;
+			return (ULONGLONG)section_header->PointerToRawData + va - (ULONGLONG)section_header->VirtualAddress;
 		}
 	}
 	return va_offset;

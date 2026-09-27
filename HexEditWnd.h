@@ -53,6 +53,18 @@
 #define                 H2                  "%02lX"
 #define                 H8                  "%08lX"
 #define                 _H8                 "0x%08lX"
+#define                 H16                 "%08X%08X"
+
+// Format a 64-bit offset as hex without relying on %I64 support in wsprintf:
+// 8 digits when the high DWORD is zero (keeps the classic display),
+// 16 digits otherwise (files >4GB).
+inline void FormatOffset64(char *buf, ULONGLONG qwOff)
+{
+	if ((DWORD)(qwOff >> 32) == 0)
+		wsprintf(buf, H8, (DWORD)qwOff);
+	else
+		wsprintf(buf, H16, (DWORD)(qwOff >> 32), (DWORD)qwOff);
+}
 
 #define                 DEF_MAX_LINES       22 // A LOOK UP VALUE
 #define                 PAIRS_X             (10 * uFontWidth)
@@ -75,13 +87,13 @@ typedef struct _HE_WIN_POS {
 
 typedef struct _HE_DATA_INFO {
 	BYTE        *pDataBuff;
-	DWORD       dwSize;     // data indicator
+	ULONGLONG   qwSize;     // data indicator (64-bit: supports files >4GB)
 	BOOL        bReadOnly;
 } HE_DATA_INFO, *PHE_DATA_INFO;
 
 typedef struct _HE_POS
 {
-	DWORD       dwOffset;
+	ULONGLONG   qwOffset;
 	BOOL        bHiword;       // (opt.) first digit of the pair ? ...or the 2nd one ?
 	BOOL        bTextSection;  // (opt.) Caret in the text part ?
 } HE_POS, *PHE_POS;
@@ -99,21 +111,21 @@ typedef enum _EDIT_OPER {
 class HE_OPER {
 
 public:
-	HE_OPER(EDIT_OPER, DWORD, DWORD, DWORD);
+	HE_OPER(EDIT_OPER, ULONGLONG, ULONGLONG, ULONGLONG);
 	~HE_OPER();
 
 public:
 	EDIT_OPER	type;
-	DWORD		dwOffset;
-	DWORD		dwNewLen;
-	DWORD		dwOldLen;
+	ULONGLONG	qwOffset;
+	ULONGLONG	qwNewLen;
+	ULONGLONG	qwOldLen;
 	BYTE		*newData;
 	BYTE		*oldData;
 };
 
 typedef struct HE_CLIPBOARD_DATA
 {
-	DWORD               dwDataSize;
+	ULONGLONG           qwDataSize;
 	BYTE                byDataStart;
 } *PHE_CLIPBOARD_DATA;
 
@@ -128,13 +140,13 @@ typedef struct HE_STATUS {
 	BOOL                bCaretVisible;
 	BOOL                bCaretPosValid;     // TRUE if posCaret was at least set one time
 
-	DWORD               dwCurOffset;
+	ULONGLONG           qwCurOffset;
 
 	BOOL                bSel;
-	DWORD               dwOffSelStart;
-	DWORD               dwOffSelEnd;
+	ULONGLONG           qwOffSelStart;
+	ULONGLONG           qwOffSelEnd;
 
-	int                 iLastLine;
+	LONGLONG            llLastLine;
 } *PHE_STATUS;
 
 class HE_SEARCHOPTIONS {
@@ -142,17 +154,17 @@ public:
 	BOOL                bInited;            // TRUE if the struct was set at least one time
 
 	BYTE*               pData;              // buffer (malloced)
-	DWORD               dwcBuff;
-	DWORD               dwcStr;
+	ULONGLONG           qwBuff;
+	ULONGLONG           qwStr;
 
 	BYTE*				pReplaceData;
-	DWORD				dwcReplaceStr;
+	ULONGLONG			qwReplaceStr;
 
 	BOOL                bASCIIStr;
 	BOOL                bWideCharStr;
 	BOOL                bCaseSensitive;
 
-	DWORD               dwStartOff;
+	ULONGLONG           qwStartOff;
 	BOOL                bDown;
 
 	int                 iDlgSearchFrom;     // 0 - top, 1 - cur pos, 2 - off
@@ -235,15 +247,15 @@ public:
 	void          SSEnableItems(HWND hDlg);
 	BOOL          SSHandleSS_OK(HWND hDlg);
 	BOOL          ReplaceHandleSS_OK(HWND hDlg);
-	BOOL          DoSpecifySettings(char *, int start = 0, int len = 0);
+	BOOL          DoSpecifySettings(char *, ULONGLONG start = 0, ULONGLONG len = 0);
 	BOOL          IsResizingAllowed();
 	BOOL          SetCaret(PHE_POS pos);
-	BOOL          SetCaret(DWORD dwOffset);
+	BOOL          SetCaret(ULONGLONG qwOffset);
 	BOOL          SetCaret();
 	BOOL          SetTopLine(int iNewLine);
-	BOOL          SetTopLine(DWORD dwOffset);
+	BOOL          SetTopLine(ULONGLONG qwOffset);
 	BOOL          SetTopLine();
-	BOOL          SetSelection(DWORD dwOffStart, DWORD dwOffEnd);
+	BOOL          SetSelection(ULONGLONG qwOffStart, ULONGLONG qwOffEnd);
 	void          HEHandleWM_CLOSE(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 	BOOL          SetHEWnd2Top(BOOL bTop);
 	BOOL          HandleStartCaretPosSel(HWND hWnd);
@@ -263,7 +275,7 @@ private:
 	EditOperList	   *current;
 	EditOperList	   *savepoint;
 	BOOL			   bSavePointValid;
-	DWORD			   dwOldSize;
+	ULONGLONG		   qwOldSize;
 	HINSTANCE          hInst;
 	HE_DATA_INFO       diData;        // working buffer
 	HE_DATA_INFO       diOrgData;     // buffer with current file content
@@ -281,8 +293,8 @@ private:
 	char               cInitialDir[MAX_PATH];
 	RECT               rctLastPos;
 
-	int			  IsDBCSFirstByte(DWORD dwOffset);
-	int			  GetDataStatus(DWORD dwOffset);
+	int			  IsDBCSFirstByte(ULONGLONG qwOffset);
+	int			  GetDataStatus(ULONGLONG qwOffset);
 	void		  AddOper(HE_OPER*);
 	BOOL		  CanCut();
 	BOOL		  CanCopy();
@@ -290,25 +302,25 @@ private:
 	BOOL		  CanUndo();
 	BOOL		  CanRedo();
 	BOOL		  CanSave();
-	DWORD		  GetOffset(DWORD dwFileOffset);
-	DWORD		  GetFileOffset(DWORD dwVirtualAddress);
-	DWORD		  GetVirtualAddress(DWORD dwFileOffset);
+	ULONGLONG	  GetOffset(ULONGLONG qwFileOffset);
+	ULONGLONG	  GetFileOffset(ULONGLONG qwVirtualAddress);
+	ULONGLONG	  GetVirtualAddress(ULONGLONG qwFileOffset);
 	void		  ApplyOper(HE_OPER *);
 	void		  UndoOper(HE_OPER *);
-	BOOL          IsOffsetVisible(DWORD dwOffset);
+	BOOL          IsOffsetVisible(ULONGLONG qwOffset);
 	BOOL          PointToPos(IN POINT *pp, OUT PHE_POS ppos);
 	void          SetupVScrollbar();
-	UINT          GetTotalLineNum();
+	ULONGLONG     GetTotalLineNum();
 	void          RepaintClientArea();
 	void          RepaintClientAreaNow();
 	void          Beep();
 	void          ErrMsg(HWND hWnd, char* szText);
 	void          ErrMsg(char* szText);
 	void          ErrMsg(HWND hWnd, char* szText, char* szCaption);
-	BOOL          IsOutOfRange(DWORD dwOffset);
+	BOOL          IsOutOfRange(ULONGLONG qwOffset);
 	BOOL          IsOutOfRange(PHE_POS ppos);
     void          SetCaretPosData(PHE_POS ppos);
-    void          SetCaretPosData(DWORD dwOffset);
+    void          SetCaretPosData(ULONGLONG qwOffset);
 	BOOL          SaveChanges();
 	void          SetStatusInfo(char *szFormat, ...);
 	void          SetStatusText(char *szFormat, ...);
@@ -317,10 +329,10 @@ private:
 	BOOL          KillSelection();
 	BOOL          MouseMoveSelect(LPPOINT ppos);
 	BOOL          Point2Selection(LPPOINT ppClient);
-	UINT          GetCurrentLine();
-	BOOL          SetCurrentLine(UINT iLine);
-	BOOL          ValidateLine(int *piLine);
-	BOOL          Search(PHE_SEARCHOPTIONS pso, DWORD *pOffset);
+	ULONGLONG     GetCurrentLine();
+	BOOL          SetCurrentLine(ULONGLONG qwLine);
+	BOOL          ValidateLine(LONGLONG *pllLine);
+	BOOL          Search(PHE_SEARCHOPTIONS pso, ULONGLONG *pOffset);
 	BOOL          PerformStrReplace(PHE_SEARCHOPTIONS pso);
 	BOOL          PerformStrReplaceAll(PHE_SEARCHOPTIONS pso);
 	BOOL          PerformStrSearch(PHE_SEARCHOPTIONS pso);
@@ -347,7 +359,7 @@ private:
 
 DWORD FUNC_CALLBACK HEditWindowThread();
 DWORD file_type(char *base);
-int get_va(char *base, DWORD file_offset);
-int get_fo(char *base, DWORD va_offset);
+ULONGLONG get_va(char *base, ULONGLONG file_offset);
+ULONGLONG get_fo(char *base, ULONGLONG va_offset);
 
 #endif
