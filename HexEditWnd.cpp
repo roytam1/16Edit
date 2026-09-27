@@ -2217,7 +2217,7 @@ BOOL HexEditWnd::HEHandleWM_COMMAND(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 
 	switch (LOWORD(wParam)) {
 	case TB_GOTO:
-		if (DialogBoxParam( GetInstance(), (PSTR)IDD_GOTO, hWnd, GotoDlgProc, 0) &&
+		if (DialogBoxParam( GetInstance(), (PSTR)IDD_GOTO, hWnd, TO_WNDPROC(GotoDlgProc), 0) &&
 			stat.bCaretPosValid) {
 			SetTopLine();
 			SetCaret(&stat.posCaret);
@@ -2225,11 +2225,11 @@ BOOL HexEditWnd::HEHandleWM_COMMAND(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		return TRUE;
 
 	case TB_OPTION:
-		DialogBoxParam( GetInstance(), (PSTR)IDD_OPTION, hWnd, OptionDlgProc, 0);
+		DialogBoxParam( GetInstance(), (PSTR)IDD_OPTION, hWnd, TO_WNDPROC(OptionDlgProc), 0);
 		return TRUE;
 
 	case TB_SELBLOCK:
-		DialogBoxParam( GetInstance(), (PSTR)IDD_SELBLOCK, hWnd, SelBlockDlgProc, 0);
+		DialogBoxParam( GetInstance(), (PSTR)IDD_SELBLOCK, hWnd, TO_WNDPROC(SelBlockDlgProc), 0);
 		return TRUE;
 
 	case TB_SELALL:
@@ -2237,11 +2237,11 @@ BOOL HexEditWnd::HEHandleWM_COMMAND(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		return TRUE;
 
 	case TB_REPLACE:
-		DialogBoxParam( GetInstance(), (PSTR)IDD_REPLACE, hWnd, ReplaceDlgProc, 0);
+		DialogBoxParam( GetInstance(), (PSTR)IDD_REPLACE, hWnd, TO_WNDPROC(ReplaceDlgProc), 0);
 		return TRUE;
 
 	case TB_SEARCH:
-		DialogBoxParam( GetInstance(), (PSTR)IDD_SEARCH, hWnd, SearchDlgProc, 0);
+		DialogBoxParam( GetInstance(), (PSTR)IDD_SEARCH, hWnd, TO_WNDPROC(SearchDlgProc), 0);
 		return TRUE;
 
 	case TB_SEARCHDOWN:

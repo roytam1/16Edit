@@ -165,7 +165,7 @@ LRESULT FUNC_CALLBACK TBHookProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 		break;
 	}
 
-	return CallWindowProc(pOrgTBWndProc, hWnd, uMsg, wParam, lParam);
+	return CallWindowProc(TO_WNDPROC(pOrgTBWndProc), hWnd, uMsg, wParam, lParam);
 }
 
 void HexEditWnd::OptionDlgInit(HWND hDlg) {

@@ -20,6 +20,7 @@
 #define __File_h__
 
 #include <windows.h>
+#include "Macros.h"
 
 //
 // constants

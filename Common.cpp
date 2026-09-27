@@ -182,7 +182,7 @@ LRESULT FUNC_CALLBACK HexOnlyEditProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM lP
 	// get default edit wnd proc
 	GetClassInfo(NULL, clsName, &wc);
 
-	return CallWindowProc(wc.lpfnWndProc, hWnd, Msg, wParam, lParam);
+	return CallWindowProc(TO_WNDPROC(wc.lpfnWndProc), hWnd, Msg, wParam, lParam);
 }
 
 LRESULT FUNC_CALLBACK EditHookEnterProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM lParam)
@@ -214,7 +214,7 @@ LRESULT FUNC_CALLBACK EditHookEnterProc(HWND hWnd,UINT Msg,WPARAM wParam,LPARAM 
 	GetClassName(hWnd, clsName, sizeof(clsName));
 	GetClassInfo(NULL, clsName, &wc);
 
-	return CallWindowProc(wc.lpfnWndProc, hWnd, Msg, wParam, lParam);
+	return CallWindowProc(TO_WNDPROC(wc.lpfnWndProc), hWnd, Msg, wParam, lParam);
 }
 
 //
@@ -346,3 +346,33 @@ ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
 	return va_offset;
 }
 
+#if _MSC_VER < 1200
+LONGLONG _atoi64 (const char * nptr) {
+  char *s = (char *)nptr;
+  LONGLONG acc = 0;
+  int neg = 0;
+ 
+  if (nptr == NULL)
+    return 0;
+ 
+  while(isspace((int)*s))
+    s++;
+  if (*s == '-')
+    {
+      neg = 1;
+      s++;
+    }
+  else if (*s == '+')
+    s++;
+ 
+  while (isdigit((int)*s))
+    {
+      acc = 10 * acc + ((int)*s - '0');
+      s++;
+    }
+ 
+  if (neg)
+    acc *= -1;
+  return acc;
+}
+#endif

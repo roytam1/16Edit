@@ -21,6 +21,7 @@
 #define __CPathString_h__
 
 #include <windows.h>
+#include "Macros.h"
 
 //
 // CPathString
