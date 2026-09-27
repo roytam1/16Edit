@@ -5,6 +5,8 @@ HE_OPER::HE_OPER(EDIT_OPER optype, ULONGLONG offset, ULONGLONG oldlen, ULONGLONG
 	qwOffset	= offset;
 	qwOldLen	= oldlen;
 	qwNewLen	= newlen;
+	qwOldAdd	= (ULONGLONG)-1;
+	qwNewAdd	= (ULONGLONG)-1;
 	if (oldlen >= 1) {
 		oldData	= new BYTE[(SIZE_T)oldlen];
 	} else {
@@ -16,6 +18,20 @@ HE_OPER::HE_OPER(EDIT_OPER optype, ULONGLONG offset, ULONGLONG oldlen, ULONGLONG
 	} else {
 		newData = NULL;
 	}
+}
+
+// No-heap-data constructor for paged large-file ops: byte spans live in
+// the add store (qwOldAdd/qwNewAdd) so multi-GB delete/paste never needs
+// a contiguous heap staging buffer on 32-bit.
+HE_OPER::HE_OPER(EDIT_OPER optype, ULONGLONG offset, ULONGLONG oldlen, ULONGLONG newlen, BOOL) {
+	type		= optype;
+	qwOffset	= offset;
+	qwOldLen	= oldlen;
+	qwNewLen	= newlen;
+	oldData		= NULL;
+	newData		= NULL;
+	qwOldAdd	= (ULONGLONG)-1;
+	qwNewAdd	= (ULONGLONG)-1;
 }
 
 HE_OPER::~HE_OPER() {

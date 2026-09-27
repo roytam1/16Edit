@@ -984,28 +984,13 @@ void HexEditWnd::RefreshHeadCache() {
 }
 
 ULONGLONG HexEditWnd::PagedAddAppend(const BYTE *pData, ULONGLONG qwLen) {
-	char szTmp[MAX_PATH];
 	DWORD dwWrote;
 
 	if (!pData || qwLen == 0)
 		return (ULONGLONG)-1;
 
-	if (hAddFile == INVALID_HANDLE_VALUE)
-	{
-		if (!GetTempPath(sizeof(szTmp), szTmp))
-			lstrcpy(szTmp, cInitialDir);
-		if (!GetTempFileName(szTmp, "16E", 0, szAddPath))
-			return (ULONGLONG)-1;
-		hAddFile = CreateFile(szAddPath, GENERIC_READ | GENERIC_WRITE,
-			FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
-			FILE_ATTRIBUTE_TEMPORARY, NULL);
-		if (hAddFile == INVALID_HANDLE_VALUE)
-		{
-			szAddPath[0] = '\0';
-			return (ULONGLONG)-1;
-		}
-		qwAddSize = 0;
-	}
+	if (!EnsureAddFile())
+		return (ULONGLONG)-1;
 
 	{
 		LONG lLow = (LONG)(qwAddSize & 0xFFFFFFFFUL);
@@ -1026,10 +1011,7 @@ ULONGLONG HexEditWnd::PagedAddAppend(const BYTE *pData, ULONGLONG qwLen) {
 			if (!WriteFile(hAddFile, p, dwWant, &dwWrote, NULL) || dwWrote != dwWant)
 			{
 				// Truncate back to previous size on partial failure.
-				LONG lLow = (LONG)(qwAddSize & 0xFFFFFFFFUL);
-				LONG lHigh = (LONG)(qwAddSize >> 32);
-				SetFilePointer(hAddFile, lLow, &lHigh, FILE_BEGIN);
-				SetEndOfFile(hAddFile);
+				TruncateAddTo(qwOff);
 				return (ULONGLONG)-1;
 			}
 			p += dwWrote;
@@ -1038,6 +1020,98 @@ ULONGLONG HexEditWnd::PagedAddAppend(const BYTE *pData, ULONGLONG qwLen) {
 		qwAddSize += qwLen;
 		return qwOff;
 	}
+}
+
+BOOL HexEditWnd::EnsureAddFile() {
+	char szTmp[MAX_PATH];
+
+	if (hAddFile != INVALID_HANDLE_VALUE)
+		return TRUE;
+
+	if (!GetTempPath(sizeof(szTmp), szTmp))
+		lstrcpy(szTmp, cInitialDir);
+	if (!GetTempFileName(szTmp, "16E", 0, szAddPath))
+		return FALSE;
+	hAddFile = CreateFile(szAddPath, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
+		FILE_ATTRIBUTE_TEMPORARY, NULL);
+	if (hAddFile == INVALID_HANDLE_VALUE)
+	{
+		szAddPath[0] = '\0';
+		return FALSE;
+	}
+	qwAddSize = 0;
+	return TRUE;
+}
+
+void HexEditWnd::TruncateAddTo(ULONGLONG qwSize) {
+	LONG lLow, lHigh;
+
+	if (hAddFile == INVALID_HANDLE_VALUE)
+		return;
+	lLow = (LONG)(qwSize & 0xFFFFFFFFUL);
+	lHigh = (LONG)(qwSize >> 32);
+	SetFilePointer(hAddFile, lLow, &lHigh, FILE_BEGIN);
+	SetEndOfFile(hAddFile);
+	if (qwAddSize > qwSize)
+		qwAddSize = qwSize;
+}
+
+// Stage a logical span into one contiguous add-store range (chunked,
+// 1MB heap temp) so arbitrarily large spans never need a contiguous
+// heap staging buffer on 32-bit. Returns add offset or -1.
+#define PAGED_STAGE_CHUNK (1048576UL)
+ULONGLONG HexEditWnd::StageLogicalToAdd(ULONGLONG qwPos, ULONGLONG qwLen) {
+	BYTE *pTmp;
+	ULONGLONG qwStart, qwLeft, qwCur;
+
+	if (qwLen == 0 || qwPos + qwLen > diData.qwSize)
+		return (ULONGLONG)-1;
+	if (!EnsureAddFile())
+		return (ULONGLONG)-1;
+
+	pTmp = (BYTE*)malloc((SIZE_T)PAGED_STAGE_CHUNK);
+	if (!pTmp)
+		return (ULONGLONG)-1;
+
+	qwStart = qwAddSize;
+	qwLeft = qwLen;
+	qwCur = qwPos;
+	while (qwLeft > 0)
+	{
+		SIZE_T cbStep = (qwLeft > (ULONGLONG)PAGED_STAGE_CHUNK) ?
+			(SIZE_T)PAGED_STAGE_CHUNK : (SIZE_T)qwLeft;
+		DWORD dwWrote;
+		if (!ReadBytesAt(qwCur, pTmp, cbStep))
+		{
+			free(pTmp);
+			TruncateAddTo(qwStart);
+			return (ULONGLONG)-1;
+		}
+		{
+			LONG lLow = (LONG)(qwAddSize & 0xFFFFFFFFUL);
+			LONG lHigh = (LONG)(qwAddSize >> 32);
+			SetLastError(NO_ERROR);
+			if (SetFilePointer(hAddFile, lLow, &lHigh, FILE_BEGIN) == (DWORD)-1 &&
+				GetLastError() != NO_ERROR)
+			{
+				free(pTmp);
+				TruncateAddTo(qwStart);
+				return (ULONGLONG)-1;
+			}
+		}
+		if (!WriteFile(hAddFile, pTmp, cbStep, &dwWrote, NULL) || dwWrote != cbStep)
+		{
+			free(pTmp);
+			TruncateAddTo(qwStart);
+			return (ULONGLONG)-1;
+		}
+		qwAddSize += (ULONGLONG)cbStep;
+		qwCur += (ULONGLONG)cbStep;
+		qwLeft -= (ULONGLONG)cbStep;
+	}
+	free(pTmp);
+	return qwStart;
 }
 
 BOOL HexEditWnd::ReadAddAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb) {
@@ -1075,7 +1149,6 @@ BOOL HexEditWnd::ReadAddAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb) {
 
 BOOL HexEditWnd::PagedInsert(ULONGLONG qwPos, const BYTE *pData, ULONGLONG qwLen) {
 	ULONGLONG qwAddOff;
-	SIZE_T idx;
 
 	if (qwLen == 0)
 		return TRUE;
@@ -1088,6 +1161,16 @@ BOOL HexEditWnd::PagedInsert(ULONGLONG qwPos, const BYTE *pData, ULONGLONG qwLen
 		ErrMsg(STR_NO_MEM);
 		return FALSE;
 	}
+	return PagedInsertFromAdd(qwPos, qwAddOff, qwLen);
+}
+
+BOOL HexEditWnd::PagedInsertFromAdd(ULONGLONG qwPos, ULONGLONG qwAddOff, ULONGLONG qwLen) {
+	SIZE_T idx;
+
+	if (qwLen == 0)
+		return TRUE;
+	if (qwPos > diData.qwSize)
+		return FALSE;
 
 	idx = SplitPieceAt(qwPos);
 	if (idx > nPieces)
@@ -1107,6 +1190,8 @@ BOOL HexEditWnd::PagedInsert(ULONGLONG qwPos, const BYTE *pData, ULONGLONG qwLen
 	diData.qwSize += qwLen;
 	OverlayShiftFrom(qwPos, (LONGLONG)qwLen);
 	MergeAround(idx);
+	if (nPieces > 4096)
+		CompactPieces();
 	RefreshHeadCache();
 	idxPieceHint = idx;
 	return TRUE;
@@ -1135,9 +1220,40 @@ BOOL HexEditWnd::PagedDelete(ULONGLONG qwPos, ULONGLONG qwLen) {
 	OverlayRemoveRange(qwPos, qwLen);
 	OverlayShiftFrom(qwPos + qwLen, -((LONGLONG)qwLen));
 	MergeAround(i1);
+	if (nPieces > 4096)
+		CompactPieces();
 	RefreshHeadCache();
 	idxPieceHint = i1;
 	return TRUE;
+}
+
+// Full linear merge pass. MergeAround only fixes the neighborhood of
+// the edited index; pathological edit patterns (e.g. thousands of
+// alternating inserts) can still accumulate adjacent-mergeable pieces,
+// making every read walk O(n). Compact bounds the table so reads stay
+// flat; it runs only past the threshold above.
+void HexEditWnd::CompactPieces() {
+	SIZE_T rd, wr;
+
+	if (nPieces < 2)
+		return;
+	wr = 0;
+	for (rd = 1; rd < nPieces; rd++)
+	{
+		if (pPieces[wr].bySrc == pPieces[rd].bySrc &&
+			pPieces[wr].qwSrcOff + pPieces[wr].qwLen == pPieces[rd].qwSrcOff)
+		{
+			pPieces[wr].qwLen += pPieces[rd].qwLen;
+		}
+		else
+		{
+			wr++;
+			if (wr != rd)
+				pPieces[wr] = pPieces[rd];
+		}
+	}
+	nPieces = wr + 1;
+	idxPieceHint = 0;
 }
 
 #define PAGED_SAVE_CHUNK (4194304UL)
@@ -3627,25 +3743,29 @@ BOOL HexEditWnd::CopySelectedBlock()
 }
 
 BOOL HexEditWnd::DeleteSelectedBlock() {
-	if (bPagedMode && (stat.qwOffSelEnd - stat.qwOffSelStart + 1) > (ULONGLONG)PAGED_PASTE_LIMIT) {
-		ErrMsg("Block is too large to delete in large-file mode (32-bit paging prototype).");
-		return FALSE;
-	}
 	if (!CanCut()) return FALSE;
 
 	ULONGLONG qwSelLen = stat.qwOffSelEnd - stat.qwOffSelStart + 1;
+	ULONGLONG qwSelOff = stat.qwOffSelStart;
 
-	HE_OPER *op = new HE_OPER(op_cut, stat.qwOffSelStart, qwSelLen, 0);
+	HE_OPER *op;
 	if (bPagedMode)
 	{
-		if (!ReadBytesAt(stat.qwOffSelStart, op->oldData, (SIZE_T)qwSelLen))
+		// Stage the span in the add store: no heap staging, no size cap.
+		ULONGLONG qwAdd = StageLogicalToAdd(qwSelOff, qwSelLen);
+		if (qwAdd == (ULONGLONG)-1)
 		{
-			delete op;
+			ErrMsg(STR_NO_MEM);
 			return FALSE;
 		}
+		op = new HE_OPER(op_cut, qwSelOff, qwSelLen, (ULONGLONG)0, TRUE);
+		op->qwOldAdd = qwAdd;
 	}
 	else
-		memcpy(op->oldData, diData.pDataBuff + stat.qwOffSelStart, (SIZE_T)qwSelLen);
+	{
+		op = new HE_OPER(op_cut, qwSelOff, qwSelLen, 0);
+		memcpy(op->oldData, diData.pDataBuff + qwSelOff, (SIZE_T)qwSelLen);
+	}
 	AddOper(op);
 	ApplyOper(op);
 
@@ -3704,65 +3824,110 @@ BOOL HexEditWnd::PasteBlockFromCB() {
 		qwOffset = stat.posCaret.qwOffset;
 	}
 
-	// Paged mode stages both spans in heap HE_OPER arrays, so cap per-op
-	// size to stay 32-bit safe; structural (size-changing) pastes within
-	// the cap go through the piece table.
-	if (bPagedMode &&
-		(qwOldLen > (ULONGLONG)PAGED_PASTE_LIMIT ||
-		 pcbd->qwDataSize > (ULONGLONG)PAGED_PASTE_LIMIT)) {
-		ErrMsg("Block is too large to paste in large-file mode (32-bit paging prototype).");
-		free(pcbd);
-		return FALSE;
-	}
-
-	if (qwOldLen == pcbd->qwDataSize) {
-		BOOL bSame;
-		if (bPagedMode)
+	// Paged mode stages both spans in the add store (chunked, 1MB heap
+	// temp), so pastes of any size work without contiguous heap staging.
+	// The clipboard copy itself (GetClipboardData malloc) is the only
+	// heap limit and already fails gracefully.
+	if (bPagedMode)
+	{
+		ULONGLONG qwOldAdd = (ULONGLONG)-1, qwNewAdd = (ULONGLONG)-1;
+		HE_OPER *op;
+		if (qwOldLen > 0)
 		{
-			BYTE *pOld = (BYTE*)malloc((SIZE_T)qwOldLen ? (SIZE_T)qwOldLen : 1);
-			if (!pOld)
+			qwOldAdd = StageLogicalToAdd(qwOffset, qwOldLen);
+			if (qwOldAdd == (ULONGLONG)-1)
 			{
 				free(pcbd);
 				ErrMsg(STR_NO_MEM);
 				return FALSE;
 			}
-			if (!ReadBytesAt(qwOffset, pOld, (SIZE_T)qwOldLen))
+		}
+		if (pcbd->qwDataSize > 0)
+		{
+			qwNewAdd = PagedAddAppend(&pcbd->byDataStart, pcbd->qwDataSize);
+			if (qwNewAdd == (ULONGLONG)-1)
 			{
-				free(pOld);
 				free(pcbd);
+				ErrMsg(STR_NO_MEM);
 				return FALSE;
 			}
-			bSame = (memcmp(pOld, &pcbd->byDataStart, (SIZE_T)qwOldLen) == 0);
-			free(pOld);
 		}
-		else
-			bSame = (memcmp(diData.pDataBuff + qwOffset, &pcbd->byDataStart, (SIZE_T)qwOldLen) == 0);
-		if (bSame) {
-			if (pcbd) {
+		if (qwOldLen == pcbd->qwDataSize && qwOldLen > 0)
+		{
+			// Chunked no-op compare straight off the staged ranges.
+			BYTE *pA, *pB;
+			ULONGLONG qwLeft = qwOldLen, qwCurO = qwOldAdd, qwCurN = qwNewAdd;
+			BOOL bSame = TRUE;
+			pA = (BYTE*)malloc((SIZE_T)PAGED_STAGE_CHUNK);
+			pB = (BYTE*)malloc((SIZE_T)PAGED_STAGE_CHUNK);
+			if (!pA || !pB)
+			{
+				free(pA);
+				free(pB);
 				free(pcbd);
+				ErrMsg(STR_NO_MEM);
+				return FALSE;
 			}
+			while (qwLeft > 0 && bSame)
+			{
+				SIZE_T cbStep = (qwLeft > (ULONGLONG)PAGED_STAGE_CHUNK) ?
+					(SIZE_T)PAGED_STAGE_CHUNK : (SIZE_T)qwLeft;
+				if (!ReadAddAt(qwCurO, pA, cbStep) || !ReadAddAt(qwCurN, pB, cbStep))
+					bSame = FALSE;
+				else if (memcmp(pA, pB, cbStep) != 0)
+					bSame = FALSE;
+				qwCurO += (ULONGLONG)cbStep;
+				qwCurN += (ULONGLONG)cbStep;
+				qwLeft -= (ULONGLONG)cbStep;
+			}
+			free(pA);
+			free(pB);
+			if (!bSame)
+			{
+				// fall through to record the oper
+			}
+			else
+			{
+				free(pcbd);
+				ConfigureTB();
+				SetupVScrollbar();
+				RepaintClientArea();
+				return TRUE;
+			}
+		}
+		else if (qwOldLen == 0 && pcbd->qwDataSize == 0)
+		{
+			free(pcbd);
 			return TRUE;
 		}
+		op = new HE_OPER(op_paste, qwOffset, qwOldLen, pcbd->qwDataSize, TRUE);
+		op->qwOldAdd = qwOldAdd;
+		op->qwNewAdd = qwNewAdd;
+		free(pcbd);
+		pcbd = NULL;
+		AddOper(op);
+		ApplyOper(op);
 	}
-
-	HE_OPER *op = new HE_OPER(op_paste, qwOffset, qwOldLen, pcbd->qwDataSize);
-	if (qwOldLen > 0) {
-		if (bPagedMode)
-		{
-			if (!ReadBytesAt(qwOffset, op->oldData, (SIZE_T)qwOldLen))
-			{
-				delete op;
+	else
+	{
+		if (qwOldLen == pcbd->qwDataSize) {
+			if (!memcmp(diData.pDataBuff + qwOffset, &pcbd->byDataStart, (SIZE_T)qwOldLen)) {
 				free(pcbd);
-				return FALSE;
+				return TRUE;
 			}
 		}
-		else
-			memcpy(op->oldData, diData.pDataBuff + qwOffset, (SIZE_T)qwOldLen);
-	}
 
-	memcpy(op->newData, &pcbd->byDataStart, (SIZE_T)pcbd->qwDataSize);
-	AddOper(op);
-	ApplyOper(op);
+		{
+		HE_OPER *op = new HE_OPER(op_paste, qwOffset, qwOldLen, pcbd->qwDataSize);
+		if (qwOldLen > 0) {
+			memcpy(op->oldData, diData.pDataBuff + qwOffset, (SIZE_T)qwOldLen);
+		}
+
+		memcpy(op->newData, &pcbd->byDataStart, (SIZE_T)pcbd->qwDataSize);
+		AddOper(op);
+		ApplyOper(op);
+		}
+	}
 
 	//
 	// repaint
@@ -3875,9 +4040,36 @@ void HexEditWnd::ApplyOper(HE_OPER *op) {
 		}
 		else if (op->type == op_paste && op->qwNewLen == op->qwOldLen)
 		{
-			ULONGLONG i;
-			for (i = 0; i < op->qwNewLen; i++)
-				PagedOverlaySet(op->qwOffset + i, op->newData[(SIZE_T)i]);
+			if (op->newData)
+			{
+				ULONGLONG i;
+				for (i = 0; i < op->qwNewLen; i++)
+					PagedOverlaySet(op->qwOffset + i, op->newData[(SIZE_T)i]);
+			}
+			else
+			{
+				// Add-backed overwrite (large paste): stream 1MB chunks.
+				BYTE *pTmp = (BYTE*)malloc((SIZE_T)PAGED_STAGE_CHUNK);
+				ULONGLONG qwLeft = op->qwNewLen, qwCur = 0;
+				if (!pTmp)
+					ErrMsg(STR_NO_MEM);
+				else while (qwLeft > 0)
+				{
+					SIZE_T cbStep = (qwLeft > (ULONGLONG)PAGED_STAGE_CHUNK) ?
+						(SIZE_T)PAGED_STAGE_CHUNK : (SIZE_T)qwLeft;
+					ULONGLONG k;
+					if (!ReadAddAt(op->qwNewAdd + qwCur, pTmp, cbStep))
+					{
+						ErrMsg("Paste failed in large-file mode.");
+						break;
+					}
+					for (k = 0; k < (ULONGLONG)cbStep; k++)
+						PagedOverlaySet(op->qwOffset + qwCur + k, pTmp[(SIZE_T)k]);
+					qwCur += (ULONGLONG)cbStep;
+					qwLeft -= (ULONGLONG)cbStep;
+				}
+				free(pTmp);
+			}
 		}
 		else if (op->type == op_cut)
 		{
@@ -3892,7 +4084,12 @@ void HexEditWnd::ApplyOper(HE_OPER *op) {
 			if (op->qwOldLen > 0)
 				bOK = PagedDelete(op->qwOffset, op->qwOldLen);
 			if (bOK && op->qwNewLen > 0)
-				bOK = PagedInsert(op->qwOffset, op->newData, op->qwNewLen);
+			{
+				if (op->newData)
+					bOK = PagedInsert(op->qwOffset, op->newData, op->qwNewLen);
+				else
+					bOK = PagedInsertFromAdd(op->qwOffset, op->qwNewAdd, op->qwNewLen);
+			}
 			if (!bOK)
 				ErrMsg("Paste failed in large-file mode.");
 		}
@@ -3983,21 +4180,60 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 		}
 		else if (op->type == op_paste && op->qwNewLen == op->qwOldLen)
 		{
-			ULONGLONG i;
-			for (i = 0; i < op->qwOldLen; i++)
+			if (op->oldData)
 			{
-				BYTE byFile = PagedRawByte(op->qwOffset + i);
-				BYTE byOld = op->oldData[(SIZE_T)i];
-				if (byOld == byFile)
-					PagedOverlayRemove(op->qwOffset + i);
-				else
-					PagedOverlaySet(op->qwOffset + i, byOld);
-				if (pHeadCache && op->qwOffset + i < (ULONGLONG)cbHeadCache)
+				ULONGLONG i;
+				for (i = 0; i < op->qwOldLen; i++)
 				{
-					BYTE byCur;
-					pHeadCache[(SIZE_T)(op->qwOffset + i)] =
-						PagedOverlayGet(op->qwOffset + i, &byCur) ? byCur : byFile;
+					BYTE byFile = PagedRawByte(op->qwOffset + i);
+					BYTE byOld = op->oldData[(SIZE_T)i];
+					if (byOld == byFile)
+						PagedOverlayRemove(op->qwOffset + i);
+					else
+						PagedOverlaySet(op->qwOffset + i, byOld);
+					if (pHeadCache && op->qwOffset + i < (ULONGLONG)cbHeadCache)
+					{
+						BYTE byCur;
+						pHeadCache[(SIZE_T)(op->qwOffset + i)] =
+							PagedOverlayGet(op->qwOffset + i, &byCur) ? byCur : byFile;
+					}
 				}
+			}
+			else
+			{
+				// Add-backed restore (large paste): stream 1MB chunks.
+				BYTE *pTmp = (BYTE*)malloc((SIZE_T)PAGED_STAGE_CHUNK);
+				ULONGLONG qwLeft = op->qwOldLen, qwCur = 0;
+				if (!pTmp)
+					ErrMsg(STR_NO_MEM);
+				else while (qwLeft > 0)
+				{
+					SIZE_T cbStep = (qwLeft > (ULONGLONG)PAGED_STAGE_CHUNK) ?
+						(SIZE_T)PAGED_STAGE_CHUNK : (SIZE_T)qwLeft;
+					ULONGLONG k;
+					if (!ReadAddAt(op->qwOldAdd + qwCur, pTmp, cbStep))
+					{
+						ErrMsg("Undo failed in large-file mode.");
+						break;
+					}
+					for (k = 0; k < (ULONGLONG)cbStep; k++)
+					{
+						BYTE byFile = PagedRawByte(op->qwOffset + qwCur + k);
+						if (pTmp[(SIZE_T)k] == byFile)
+							PagedOverlayRemove(op->qwOffset + qwCur + k);
+						else
+							PagedOverlaySet(op->qwOffset + qwCur + k, pTmp[(SIZE_T)k]);
+						if (pHeadCache && op->qwOffset + qwCur + k < (ULONGLONG)cbHeadCache)
+						{
+							BYTE byCur;
+							pHeadCache[(SIZE_T)(op->qwOffset + qwCur + k)] =
+								PagedOverlayGet(op->qwOffset + qwCur + k, &byCur) ? byCur : byFile;
+						}
+					}
+					qwCur += (ULONGLONG)cbStep;
+					qwLeft -= (ULONGLONG)cbStep;
+				}
+				free(pTmp);
 			}
 		}
 		else if (op->type == op_cut)
@@ -4005,7 +4241,12 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 			// Undo delete = re-insert the removed bytes.
 			if (op->qwOldLen > 0)
 			{
-				if (!PagedInsert(op->qwOffset, op->oldData, op->qwOldLen))
+				BOOL bOK;
+				if (op->oldData)
+					bOK = PagedInsert(op->qwOffset, op->oldData, op->qwOldLen);
+				else
+					bOK = PagedInsertFromAdd(op->qwOffset, op->qwOldAdd, op->qwOldLen);
+				if (!bOK)
 					ErrMsg("Undo failed in large-file mode.");
 			}
 			if (op->qwOldLen > 0)
@@ -4018,7 +4259,12 @@ void HexEditWnd::UndoOper(HE_OPER *op) {
 			if (op->qwNewLen > 0)
 				bOK = PagedDelete(op->qwOffset, op->qwNewLen);
 			if (bOK && op->qwOldLen > 0)
-				bOK = PagedInsert(op->qwOffset, op->oldData, op->qwOldLen);
+			{
+				if (op->oldData)
+					bOK = PagedInsert(op->qwOffset, op->oldData, op->qwOldLen);
+				else
+					bOK = PagedInsertFromAdd(op->qwOffset, op->qwOldAdd, op->qwOldLen);
+			}
 			if (!bOK)
 				ErrMsg("Undo failed in large-file mode.");
 		}

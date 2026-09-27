@@ -112,6 +112,7 @@ class HE_OPER {
 
 public:
 	HE_OPER(EDIT_OPER, ULONGLONG, ULONGLONG, ULONGLONG);
+	HE_OPER(EDIT_OPER, ULONGLONG, ULONGLONG, ULONGLONG, BOOL bNoAlloc);
 	~HE_OPER();
 
 public:
@@ -119,8 +120,10 @@ public:
 	ULONGLONG	qwOffset;
 	ULONGLONG	qwNewLen;
 	ULONGLONG	qwOldLen;
-	BYTE		*newData;
-	BYTE		*oldData;
+	BYTE		*newData;   // NULL when staged in add store (see below)
+	BYTE		*oldData;   // NULL when staged in add store
+	ULONGLONG	qwNewAdd;   // add-store offset, or (ULONGLONG)-1
+	ULONGLONG	qwOldAdd;   // add-store offset, or (ULONGLONG)-1
 };
 
 typedef struct HE_CLIPBOARD_DATA
@@ -405,10 +408,15 @@ private:
 	BOOL            PagedResolve(ULONGLONG qwPos, BYTE *pSrc, ULONGLONG *pSrcOff, ULONGLONG *pAvail);
 	SIZE_T          SplitPieceAt(ULONGLONG qwPos);
 	void            MergeAround(SIZE_T idx);
+	void            CompactPieces();
 	void            RefreshHeadCache();
 	ULONGLONG       PagedAddAppend(const BYTE *pData, ULONGLONG qwLen);
 	BOOL            ReadAddAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb);
+	BOOL            EnsureAddFile();
+	void            TruncateAddTo(ULONGLONG qwSize);
+	ULONGLONG       StageLogicalToAdd(ULONGLONG qwPos, ULONGLONG qwLen);
 	BOOL            PagedInsert(ULONGLONG qwPos, const BYTE *pData, ULONGLONG qwLen);
+	BOOL            PagedInsertFromAdd(ULONGLONG qwPos, ULONGLONG qwAddOff, ULONGLONG qwLen);
 	BOOL            PagedDelete(ULONGLONG qwPos, ULONGLONG qwLen);
 
 };
