@@ -305,6 +305,9 @@ private:
 	ULONGLONG	  GetOffset(ULONGLONG qwFileOffset);
 	ULONGLONG	  GetFileOffset(ULONGLONG qwVirtualAddress);
 	ULONGLONG	  GetVirtualAddress(ULONGLONG qwFileOffset);
+	UINT		  GetOffsetDigits();
+	UINT		  GetPairsX();
+	UINT		  GetCharsX();
 	void		  ApplyOper(HE_OPER *);
 	void		  UndoOper(HE_OPER *);
 	BOOL          IsOffsetVisible(ULONGLONG qwOffset);

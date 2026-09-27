@@ -352,10 +352,39 @@ ULONGLONG HexEditWnd::GetOffset(ULONGLONG qwFileOffset) {
 	return qwOffset;
 }
 
+// Number of hex digits needed for the offset column: 8 below 4GB,
+// 16 once any displayed offset exceeds 0xFFFFFFFF (large files or
+// 64-bit PE virtual addresses). Decided per file/mode so the layout
+// stays stable while scrolling.
+UINT HexEditWnd::GetOffsetDigits() {
+	if (diData.qwSize == 0)
+		return 8;
+	ULONGLONG qwMax = GetOffset(diData.qwSize - 1);
+	return (qwMax > (ULONGLONG)0xFFFFFFFFUL) ? 16 : 8;
+}
+
+// X of the hex-pair area. Classic layout (PAIRS_X) is preserved for
+// 8-digit offsets; wide offsets shift right by 8 chars so the
+// 16-digit offset never overlaps the hex values.
+UINT HexEditWnd::GetPairsX() {
+	UINT uPairs = PAIRS_X;
+	if (GetOffsetDigits() > 8)
+		uPairs += 8 * uFontWidth;
+	return uPairs;
+}
+
+UINT HexEditWnd::GetCharsX() {
+	UINT uChars = CHARS_X;
+	if (GetOffsetDigits() > 8)
+		uChars += 8 * uFontWidth;
+	return uChars;
+}
+
 BOOL HexEditWnd::PaintText(HWND hWnd) {
 	HDC           hDC, hdcBuff;
 	ULONGLONG     qwOffset;
 	UINT          u, u2, icySel;
+	UINT          uPairsX, uCharsX, uOffDigits;
 	char          cBuff[40];
 	char          cOffBuff[24];
 	BYTE          byCur, byNext;
@@ -384,6 +413,12 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 	if (!diData.qwSize)
 		goto Exit; // ERR
 
+	// layout: reserve 8 or 16 digits + colon so wide offsets never
+	// overlap the hex pairs
+	uOffDigits = GetOffsetDigits();
+	uPairsX = GetPairsX();
+	uCharsX = GetCharsX();
+
 	// paint to bmp
 	qwOffset = stat.qwCurOffset;
 
@@ -392,9 +427,15 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 		if (qwOffset >= diData.qwSize)
 			break;
 
-		// paint offset (8 digits below 4GB, 16 digits above)
+		// paint offset (fixed width: 8 or 16 digits, keeps columns aligned)
 		SetTextColor(hdcBuff, RGB_BLACK);
-		FormatOffset64(cOffBuff, GetOffset(qwOffset));
+		{
+			ULONGLONG qwDisp = GetOffset(qwOffset);
+			if (uOffDigits > 8)
+				wsprintf(cOffBuff, H16, (DWORD)(qwDisp >> 32), (DWORD)qwDisp);
+			else
+				FormatOffset64(cOffBuff, qwDisp);
+		}
 		wsprintf(cBuff, "%s:", cOffBuff);
 		SelectObject(hdcBuff, hFont);
 		TextOut(hdcBuff, LEFT_OFFSET, u * uFontHeight + TOP_OFFSET, cBuff, lstrlen(cBuff));
@@ -444,7 +485,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 
 			wsprintf(cBuff, H2, byCur);
 			TextOut(hdcBuff,
-					PAIRS_X + DIGIT_PAIR_WIDTH * u2, u * uFontHeight + TOP_OFFSET,
+					uPairsX + DIGIT_PAIR_WIDTH * u2, u * uFontHeight + TOP_OFFSET,
 					cBuff, 2);
 
 			//
@@ -476,7 +517,7 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 				}
 
 				TextOut(hdcBuff,
-						CHARS_X + u2 * uFontWidth, u * uFontHeight + TOP_OFFSET,
+						uCharsX + u2 * uFontWidth, u * uFontHeight + TOP_OFFSET,
 						cBuff, strlen(cBuff));
 			} else {
 				bSkipOneByte = FALSE;
@@ -496,23 +537,23 @@ BOOL HexEditWnd::PaintText(HWND hWnd) {
 
 				// sel pair
 				BitBlt(hdcBuff,
-					   PAIRS_X + u2 * DIGIT_PAIR_WIDTH - 2,
+					   uPairsX + u2 * DIGIT_PAIR_WIDTH - 2,
 					   u * uFontHeight + TOP_OFFSET,
 					   icySel,
 					   uFontHeight,
 					   hdcBuff,
-					   PAIRS_X + u2 * DIGIT_PAIR_WIDTH - 2,
+					   uPairsX + u2 * DIGIT_PAIR_WIDTH - 2,
 					   u * uFontHeight + TOP_OFFSET,
 					   NOTSRCCOPY);
 
 				// sel char
 				BitBlt(hdcBuff,
-					   CHARS_X + u2 * uFontWidth - 2,
+					   uCharsX + u2 * uFontWidth - 2,
 					   u * uFontHeight + TOP_OFFSET,
 					   uFontWidth,
 					   uFontHeight,
 					   hdcBuff,
-					   CHARS_X + u2 * uFontWidth - 2,
+					   uCharsX + u2 * uFontWidth - 2,
 					   u * uFontHeight + TOP_OFFSET,
 					   NOTSRCCOPY);
 			}
@@ -532,8 +573,8 @@ Exit:
 	SelectObject(hdcBuff, hFont);
 	SetStatusText();
 	MoveToEx(hdcBuff, rct.left + 4, rct.bottom - SB_HEIGHT - 30, NULL);
-	LineTo(hdcBuff, CHARS_X + 16 * uFontWidth + 8, rct.bottom - SB_HEIGHT - 30);
-	LineTo(hdcBuff, CHARS_X + 16 * uFontWidth + 8, rct.top);
+	LineTo(hdcBuff, GetCharsX() + 16 * uFontWidth + 8, rct.bottom - SB_HEIGHT - 30);
+	LineTo(hdcBuff, GetCharsX() + 16 * uFontWidth + 8, rct.top);
 	LineTo(hdcBuff, rct.left + 4, rct.top);
 	LineTo(hdcBuff, rct.left + 4, rct.bottom - SB_HEIGHT - 30);
 	TextOut(hdcBuff, rct.left + 4, rct.bottom - SB_HEIGHT - 28, cSBText, lstrlen(cSBText) );
@@ -611,10 +652,10 @@ BOOL HexEditWnd::SetCaret(PHE_POS ppos)
 	// caret in the text section ?
 	if (ppos->bTextSection) {
 		bRet = SetCaretPos(
-						  CHARS_X + uFontWidth * uxPair,
+						  GetCharsX() + uFontWidth * uxPair,
 						  uyLine * uFontHeight + iyHETop + TOP_OFFSET);
 	} else {
-		ux = PAIRS_X + uxPair * DIGIT_PAIR_WIDTH;
+		ux = GetPairsX() + uxPair * DIGIT_PAIR_WIDTH;
 		if (!ppos->bHiword)
 			ux += uFontWidth;
 		bRet = SetCaretPos(
@@ -740,7 +781,7 @@ void HexEditWnd::HEHandleWM_SIZE(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 		rctHE.top     = (LONG)iyHETop;
 		rctHE.bottom  = (LONG)iyHEBottom;
 		rctHE.left    = 0;
-		rctHE.right   = (LONG)(CHARS_X + 16 * uFontWidth);
+		rctHE.right   = (LONG)(GetCharsX() + 16 * uFontWidth);
 	}
 
 	// resize TB (hTB is NULL during initial CreateWindow WM_SIZE)
@@ -814,20 +855,22 @@ BOOL HexEditWnd::HEHandleLButton(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 BOOL HexEditWnd::PointToPos(IN POINT *pp, OUT PHE_POS ppos) {
 	UINT  uLine, uPair, uxCurPair;
+	UINT  uPairsX = GetPairsX();
+	UINT  uCharsX = GetCharsX();
 
 	memset(ppos, 0, sizeof(HE_POS));
 
 	// in digit pair field ?
-	if ((DWORD)pp->x >= PAIRS_X &&
-		(DWORD)pp->x <  PAIRS_X + 16 * DIGIT_PAIR_WIDTH &&
+	if ((DWORD)pp->x >= uPairsX &&
+		(DWORD)pp->x <  uPairsX + 16 * DIGIT_PAIR_WIDTH &&
 		(DWORD)pp->y >= iyHETop &&
 		(DWORD)pp->y <  iyHETop + uMaxLines * uFontHeight) {
 		uLine =  ((DWORD)pp->y - iyHETop) / uFontHeight;
-		uPair =  pp->x - PAIRS_X;
+		uPair =  pp->x - uPairsX;
 		uPair /= DIGIT_PAIR_WIDTH;
 
 		// x in space between digit pairs ?
-		uxCurPair = PAIRS_X + uPair * DIGIT_PAIR_WIDTH;	// -> x pos of cur pair
+		uxCurPair = uPairsX + uPair * DIGIT_PAIR_WIDTH;	// -> x pos of cur pair
 		if ((UINT)pp->x > uxCurPair + 2*uFontWidth) {
 			// last pair of the line ?
 			if (uPair == 0xF)
@@ -853,12 +896,12 @@ BOOL HexEditWnd::PointToPos(IN POINT *pp, OUT PHE_POS ppos) {
 		return TRUE; // OK
 	}
 	// in text field ?
-	else if ((DWORD)pp->x >= CHARS_X &&
-			 (DWORD)pp->x <  CHARS_X + uFontWidth * 16 &&
+	else if ((DWORD)pp->x >= uCharsX &&
+			 (DWORD)pp->x <  uCharsX + uFontWidth * 16 &&
 			 (DWORD)pp->y >= iyHETop &&
 			 (DWORD)pp->y <  iyHETop + uMaxLines * uFontHeight) {
 		uLine =  ((DWORD)pp->y - iyHETop) / uFontHeight;
-		uPair =  (UINT)pp->x - CHARS_X;
+		uPair =  (UINT)pp->x - uCharsX;
 		uPair /= uFontWidth;
 
 		// out of range?
@@ -1985,12 +2028,14 @@ BOOL HexEditWnd::Point2Selection(LPPOINT ppClient)
 BOOL HexEditWnd::MouseMoveSelect(LPPOINT pos) {
 	POINT  poi;
 	BOOL   bRet;
+	UINT   uPairsX = GetPairsX();
+	UINT   uCharsX = GetCharsX();
 
 	poi = *pos;
 
 	// cursor not in text/hex region ?
-	if ((DWORD)poi.x > PAIRS_X
-		&& (DWORD)poi.x < CHARS_X + 16*uFontWidth
+	if ((DWORD)poi.x > uPairsX
+		&& (DWORD)poi.x < uCharsX + 16*uFontWidth
 		&& stat.bMouseSelecting)
 		if ((DWORD)poi.y > iyHETop + uMaxLines*uFontHeight) { // under ?
 			// scroll down
@@ -1999,9 +2044,9 @@ BOOL HexEditWnd::MouseMoveSelect(LPPOINT pos) {
 			MakeCaretVisible();
 
 			if (stat.posCaret.bTextSection)
-				poi.x = CHARS_X + 15*uFontWidth;
+				poi.x = uCharsX + 15*uFontWidth;
 			else
-				poi.x = PAIRS_X + 15*DIGIT_PAIR_WIDTH;
+				poi.x = uPairsX + 15*DIGIT_PAIR_WIDTH;
 			poi.y = iyHETop + uFontHeight * (uMaxLines-1);
 			if (timerId == 0) {
 				SetTimer(hMainWnd, SELECT_TIMER, 50, NULL);
@@ -2013,9 +2058,9 @@ BOOL HexEditWnd::MouseMoveSelect(LPPOINT pos) {
 			MakeCaretVisible();
 
 			if (stat.posCaret.bTextSection)
-				poi.x = CHARS_X;
+				poi.x = uCharsX;
 			else
-				poi.x = PAIRS_X;
+				poi.x = uPairsX;
 			poi.y = iyHETop;
 			if (timerId == 0) {
 				SetTimer(hMainWnd, SELECT_TIMER, 50, NULL);
