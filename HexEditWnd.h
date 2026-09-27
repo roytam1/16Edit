@@ -274,6 +274,12 @@ typedef struct _HE_EDIT_CELL {
 	BYTE        byVal;
 } HE_EDIT_CELL;
 
+typedef struct _HE_PIECE {
+	BYTE        bySrc;      // 0 = original file, 1 = add store
+	ULONGLONG   qwSrcOff;   // offset within source
+	ULONGLONG   qwLen;
+} HE_PIECE;
+
 private:
 	UINT			   timerId;
 	EditOperList	   *operList;
@@ -292,6 +298,13 @@ private:
 	SIZE_T             capEditCells;
 	BYTE               *pHeadCache;   // first 64KB for PE/VA translation (paged mode)
 	SIZE_T             cbHeadCache;
+	HE_PIECE           *pPieces;      // piece table for size changes (paged mode)
+	SIZE_T             nPieces;
+	SIZE_T             capPieces;
+	SIZE_T             idxPieceHint;  // scan hint for sequential reads
+	HANDLE             hAddFile;      // add store for inserted bytes (paged mode)
+	char               szAddPath[MAX_PATH];
+	ULONGLONG          qwAddSize;
 	UINT               uFontHeight, uFontWidth, uMaxLines;
 	HE_STATUS          stat;
 	HE_SEARCHOPTIONS   search;
@@ -379,12 +392,24 @@ private:
 	void            PagedOverlaySet(ULONGLONG qwOff, BYTE byVal);
 	void            PagedOverlayRemove(ULONGLONG qwOff);
 	void            PagedOverlayClear();
+	void            OverlayShiftFrom(ULONGLONG qwPos, LONGLONG lDelta);
+	void            OverlayRemoveRange(ULONGLONG qwPos, ULONGLONG qwLen);
 	BYTE            PagedRawByte(ULONGLONG qwOff);
 	void            ClosePaged();
 	BOOL            OpenPaged(const char *szPath, BOOL bRO);
 	BOOL            SavePaged();
 	BOOL            PagedApplyModify(HE_OPER *op);
 	void            PagedUndoModify(HE_OPER *op);
+	BOOL            EnsurePieceCap(SIZE_T nNeed);
+	BOOL            PieceIndexAt(ULONGLONG qwPos, SIZE_T *pIdx, ULONGLONG *pOffIn);
+	BOOL            PagedResolve(ULONGLONG qwPos, BYTE *pSrc, ULONGLONG *pSrcOff, ULONGLONG *pAvail);
+	SIZE_T          SplitPieceAt(ULONGLONG qwPos);
+	void            MergeAround(SIZE_T idx);
+	void            RefreshHeadCache();
+	ULONGLONG       PagedAddAppend(const BYTE *pData, ULONGLONG qwLen);
+	BOOL            ReadAddAt(ULONGLONG qwOff, BYTE *pBuf, SIZE_T cb);
+	BOOL            PagedInsert(ULONGLONG qwPos, const BYTE *pData, ULONGLONG qwLen);
+	BOOL            PagedDelete(ULONGLONG qwPos, ULONGLONG qwLen);
 
 };
 
