@@ -426,5 +426,6 @@ DWORD FUNC_CALLBACK HEditWindowThread();
 DWORD file_type(char *base);
 ULONGLONG get_va(char *base, ULONGLONG file_offset);
 ULONGLONG get_fo(char *base, ULONGLONG va_offset);
+ULONGLONG pe_max_va(char *base);
 
 #endif

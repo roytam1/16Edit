@@ -421,12 +421,26 @@ ULONGLONG HexEditWnd::GetOffset(ULONGLONG qwFileOffset) {
 
 // Number of hex digits needed for the offset column: 8 below 4GB,
 // 16 once any displayed offset exceeds 0xFFFFFFFF (large files or
-// 64-bit PE virtual addresses). Decided per file/mode so the layout
-// stays stable while scrolling.
+// 64-bit PE virtual addresses). Uses the maximum over the whole file -
+// sampling only the last byte breaks on PEs with overlay data (e.g.
+// Authenticode) past the last section, whose tail maps to small raw
+// offsets while section lines need 16 digits.
 UINT HexEditWnd::GetOffsetDigits() {
+	ULONGLONG qwMax;
+
 	if (diData.qwSize == 0)
 		return 8;
-	ULONGLONG qwMax = GetOffset(diData.qwSize - 1);
+	qwMax = diData.qwSize - 1; // headers/overlay show raw offsets
+	if (!bFileOffset && IsPEFile())
+	{
+		char *base = bPagedMode ? (char*)pHeadCache : (char*)diData.pDataBuff;
+		if (base)
+		{
+			ULONGLONG qwVA = pe_max_va(base);
+			if (qwVA > qwMax)
+				qwMax = qwVA;
+		}
+	}
 	return (qwMax > (ULONGLONG)0xFFFFFFFFUL) ? 16 : 8;
 }
 

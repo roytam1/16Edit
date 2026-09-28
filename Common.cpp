@@ -392,19 +392,88 @@ DWORD file_type(char *base) {
 }
 
 #define isin(address,start,length) ((address)>=(start) && (address)<(start)+(length))
+
+// Lowest PointerToRawData among sections carrying raw data. Bytes below
+// it are image headers, which the loader maps at ImageBase.
+static BOOL pe_min_raw(char *base, ULONGLONG qwSecBase, WORD wNsec, ULONGLONG *pMin) {
+	ULONGLONG qwMin = (ULONGLONG)-1;
+	WORD sect;
+	BOOL bAny = FALSE;
+
+	for (sect = 0; sect < wNsec; sect++) {
+		ULONGLONG qwEnt = qwSecBase + (ULONGLONG)sect * 40;
+		DWORD dwRaw, dwRawSize;
+
+		if (pe_bad(base + (SIZE_T)qwEnt, 40))
+			break;
+		memcpy(&dwRawSize, base + (SIZE_T)(qwEnt + 16), 4); // SizeOfRawData
+		memcpy(&dwRaw, base + (SIZE_T)(qwEnt + 20), 4);     // PointerToRawData
+		if (dwRawSize > 0 && (ULONGLONG)dwRaw < qwMin) {
+			qwMin = (ULONGLONG)dwRaw;
+			bAny = TRUE;
+		}
+	}
+	if (!bAny)
+		return FALSE;
+	*pMin = qwMin;
+	return TRUE;
+}
+
+// Highest image-relative end (VirtualAddress + data) over all sections.
+ULONGLONG pe_max_va(char *base) {
+	LONG lFanew;
+	WORD wNsec;
+	ULONGLONG qwImageBase, qwSecBase, qwMax = 0;
+	WORD sect;
+
+	if (!pe_headers(base, &lFanew, &wNsec, NULL, &qwSecBase))
+		return 0;
+	if (!pe_imagebase(base, lFanew, &qwImageBase))
+		return 0;
+
+	for (sect = 0; sect < wNsec; sect++) {
+		ULONGLONG qwEnt = qwSecBase + (ULONGLONG)sect * 40;
+		DWORD dwVA, dwRawSize, dwVirtSize;
+		ULONGLONG qwEnd;
+
+		if (pe_bad(base + (SIZE_T)qwEnt, 40))
+			break;
+		memcpy(&dwVirtSize, base + (SIZE_T)(qwEnt + 8), 4);  // VirtualSize
+		memcpy(&dwVA, base + (SIZE_T)(qwEnt + 12), 4);       // VirtualAddress
+		memcpy(&dwRawSize, base + (SIZE_T)(qwEnt + 16), 4);  // SizeOfRawData
+		qwEnd = (ULONGLONG)dwVA +
+			((ULONGLONG)dwVirtSize > (ULONGLONG)dwRawSize ?
+			 (ULONGLONG)dwVirtSize : (ULONGLONG)dwRawSize);
+		if (qwEnd > qwMax)
+			qwMax = qwEnd;
+	}
+	if (qwMax > (ULONGLONG)-1 - qwImageBase)
+		return (ULONGLONG)-1; // saturate on absurd headers
+	return qwImageBase + qwMax;
+}
+
 /*
  * Get the vitual offset from file offset (64-bit for files >4GB).
  * ImageBase and section walks follow the on-disk magic, so 32-bit and
  * 64-bit PEs translate correctly regardless of the 16Edit build.
+ * Header bytes below the first raw-data section map to ImageBase+offset
+ * (where the loader puts them); bytes past the last section (e.g.
+ * Authenticode overlay) have no VA and pass through as file offsets.
  */
 ULONGLONG get_va(char *base, ULONGLONG file_offset) {
 	LONG lFanew;
 	WORD wNsec;
-	ULONGLONG qwImageBase, qwSecBase;
+	ULONGLONG qwImageBase, qwSecBase, qwMinRaw;
 	WORD sect;
 
 	if (!pe_headers(base, &lFanew, &wNsec, NULL, &qwSecBase))
 		return file_offset;
+	if (!pe_imagebase(base, lFanew, &qwImageBase))
+		return file_offset;
+
+	if (pe_min_raw(base, qwSecBase, wNsec, &qwMinRaw) &&
+		file_offset < qwMinRaw)
+		return qwImageBase + file_offset;
 	if (!pe_imagebase(base, lFanew, &qwImageBase))
 		return file_offset;
 
@@ -429,11 +498,13 @@ ULONGLONG get_va(char *base, ULONGLONG file_offset) {
  * Get the file offset from vitual offset (64-bit for files >4GB).
  * ImageBase and section walks follow the on-disk magic, so 32-bit and
  * 64-bit PEs translate correctly regardless of the 16Edit build.
+ * Header VAs below the first section map back to file offsets so
+ * get_va/get_fo round-trip; overlay VAs fall through unchanged.
  */
 ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
 	LONG lFanew;
 	WORD wNsec;
-	ULONGLONG qwImageBase, qwSecBase;
+	ULONGLONG qwImageBase, qwSecBase, qwMinRaw;
 	ULONGLONG	va;
 	WORD sect;
 
@@ -442,7 +513,12 @@ ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
 	if (!pe_imagebase(base, lFanew, &qwImageBase))
 		return va_offset;
 
+	if (va_offset < qwImageBase)
+		return va_offset;
 	va = va_offset - qwImageBase;
+
+	if (pe_min_raw(base, qwSecBase, wNsec, &qwMinRaw) && va < qwMinRaw)
+		return va;
 
 	for (sect = 0; sect < wNsec; sect++) {
 		ULONGLONG qwEnt = qwSecBase + (ULONGLONG)sect * 40;
