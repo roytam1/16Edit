@@ -75,7 +75,11 @@ LONGLONG _atoi64 (const char * nptr);
 #if _MSC_VER < 1200
 #define TO_WNDPROC(x) ((int (__stdcall *)(void))x)
 #else
+#ifdef WIN64
+#define TO_WNDPROC(x) ((__int64 (__cdecl *__ptr64 )(struct HWND__ *__ptr64 ,unsigned int,unsigned __int64,__int64))x)
+#else
 #define TO_WNDPROC(x) (x)
+#endif
 #endif
 
 
