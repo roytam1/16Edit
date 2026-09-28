@@ -1,4 +1,4 @@
-# Microsoft Developer Studio Generated NMAKE File, Based on 16Edit-AXP64.dsp
+# Microsoft Developer Studio Generated NMAKE File, Based on 16Edit-MIPS.dsp
 !IF "$(CFG)" == ""
 CFG=16Edit - Win32 Release
 !MESSAGE No configuration specified. Defaulting to 16Edit - Win32 Release.
@@ -9,7 +9,7 @@ CFG=16Edit - Win32 Release
 !MESSAGE You can specify a configuration when running NMAKE
 !MESSAGE by defining the macro CFG on the command line. For example:
 !MESSAGE 
-!MESSAGE NMAKE /f "16Edit-AXP64.mak" CFG="16Edit - Win32 Release"
+!MESSAGE NMAKE /f "16Edit-MIPS.mak" CFG="16Edit - Win32 Release"
 !MESSAGE 
 !MESSAGE Possible choices for configuration are:
 !MESSAGE 
@@ -27,13 +27,13 @@ NULL=nul
 
 !IF  "$(CFG)" == "16Edit - Win32 Release"
 
-OUTDIR=.\AXP64Rel
-INTDIR=.\AXP64Rel
+OUTDIR=.\MIPSRel
+INTDIR=.\MIPSRel
 # Begin Custom Macros
-OutDir=.\AXP64Rel
+OutDir=.\MIPSRel
 # End Custom Macros
 
-ALL : ".\bin\16Edit_AXP64.exe" "$(OUTDIR)\16Edit-AXP64.bsc"
+ALL : ".\bin\16Edit_MIPS.exe" "$(OUTDIR)\16Edit-MIPS.bsc"
 
 
 CLEAN :
@@ -57,8 +57,8 @@ CLEAN :
 	-@erase "$(INTDIR)\vc60.idb"
 	-@erase "$(INTDIR)\WideChar.obj"
 	-@erase "$(INTDIR)\WideChar.sbr"
-	-@erase "$(OUTDIR)\16Edit-AXP64.bsc"
-	-@erase ".\bin\16Edit_AXP64.exe"
+	-@erase "$(OUTDIR)\16Edit-MIPS.bsc"
+	-@erase ".\bin\16Edit_MIPS.exe"
 
 "$(OUTDIR)" :
     if not exist "$(OUTDIR)/$(NULL)" mkdir "$(OUTDIR)"
@@ -66,7 +66,7 @@ CLEAN :
 MTL=midl.exe
 MTL_PROJ=/nologo /D "NDEBUG" /mktyplib203 /win32 
 CPP=cl.exe
-CPP_PROJ=/nologo /MD /Ap64 /DWIN64 /W3 /GX /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /O1 /c 
+CPP_PROJ=/nologo /MD /Gt0 /W3 /GX /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /O1 /c 
 
 .c{$(INTDIR)}.obj:
    $(CPP) $(CPP_PROJ) $<  
@@ -89,7 +89,7 @@ CPP_PROJ=/nologo /MD /Ap64 /DWIN64 /W3 /GX /D "WIN32" /D "NDEBUG" /D "_WINDOWS" 
 RSC=rc.exe
 RSC_PROJ=/l 0x407 /fo"$(INTDIR)\rsrc.res" /d "NDEBUG" 
 BSC32=bscmake.exe
-BSC32_FLAGS=/nologo /o"$(OUTDIR)\16Edit-AXP64.bsc" 
+BSC32_FLAGS=/nologo /o"$(OUTDIR)\16Edit-MIPS.bsc" 
 BSC32_SBRS= \
 	"$(INTDIR)\16EditLoader.sbr" \
 	"$(INTDIR)\Common.sbr" \
@@ -101,13 +101,13 @@ BSC32_SBRS= \
 	"$(INTDIR)\OFN.sbr" \
 	"$(INTDIR)\WideChar.sbr"
 
-"$(OUTDIR)\16Edit-AXP64.bsc" : "$(OUTDIR)" $(BSC32_SBRS)
+"$(OUTDIR)\16Edit-MIPS.bsc" : "$(OUTDIR)" $(BSC32_SBRS)
     $(BSC32) @<<
   $(BSC32_FLAGS) $(BSC32_SBRS)
 <<
 
 LINK32=link.exe
-LINK32_FLAGS=kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib COMCTL32.LIB /nologo /subsystem:windows /incremental:no /pdb:"$(OUTDIR)\16Edit_AXP64.pdb" /machine:ALPHA64 /out:"bin\16Edit_AXP64.exe" 
+LINK32_FLAGS=kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib COMCTL32.LIB /nologo /subsystem:windows /incremental:no /pdb:"$(OUTDIR)\16Edit_MIPS.pdb" /machine:MIPS /out:"bin\16Edit_MIPS.exe" 
 LINK32_OBJS= \
 	"$(INTDIR)\16EditLoader.obj" \
 	"$(INTDIR)\Common.obj" \
@@ -120,20 +120,20 @@ LINK32_OBJS= \
 	"$(INTDIR)\WideChar.obj" \
 	"$(INTDIR)\rsrc.res"
 
-".\bin\16Edit_AXP64.exe" : "$(OUTDIR)" $(DEF_FILE) $(LINK32_OBJS)
+".\bin\16Edit_MIPS.exe" : "$(OUTDIR)" $(DEF_FILE) $(LINK32_OBJS)
     $(LINK32) @<<
   $(LINK32_FLAGS) $(LINK32_OBJS)
 <<
 
 !ELSEIF  "$(CFG)" == "16Edit - Win32 Debug"
 
-OUTDIR=.\AXP64Debug
-INTDIR=.\AXP64Debug
+OUTDIR=.\MIPSDebug
+INTDIR=.\MIPSDebug
 # Begin Custom Macros
-OutDir=.\AXP64Debug
+OutDir=.\MIPSDebug
 # End Custom Macros
 
-ALL : ".\bin\16Edit_AXP64.exe" "$(OUTDIR)\16Edit-AXP64.bsc"
+ALL : ".\bin\16Edit_MIPS.exe" "$(OUTDIR)\16Edit-MIPS.bsc"
 
 
 CLEAN :
@@ -157,10 +157,10 @@ CLEAN :
 	-@erase "$(INTDIR)\vc60.idb"
 	-@erase "$(INTDIR)\WideChar.obj"
 	-@erase "$(INTDIR)\WideChar.sbr"
-	-@erase "$(OUTDIR)\16Edit-AXP64.bsc"
-	-@erase "$(OUTDIR)\16Edit_AXP64.pdb"
-	-@erase ".\bin\16Edit_AXP64.exe"
-	-@erase ".\bin\16Edit_AXP64.ilk"
+	-@erase "$(OUTDIR)\16Edit-MIPS.bsc"
+	-@erase "$(OUTDIR)\16Edit_MIPS.pdb"
+	-@erase ".\bin\16Edit_MIPS.exe"
+	-@erase ".\bin\16Edit_MIPS.ilk"
 
 "$(OUTDIR)" :
     if not exist "$(OUTDIR)/$(NULL)" mkdir "$(OUTDIR)"
@@ -168,7 +168,7 @@ CLEAN :
 MTL=midl.exe
 MTL_PROJ=/nologo /D "_DEBUG" /mktyplib203 /win32 
 CPP=cl.exe
-CPP_PROJ=/nologo /MLd /Ap64 /DWIN64 /W3 /GX /Od /D "WIN32" /D "_DEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fp"$(INTDIR)\16Edit-AXP64.pch" /YX /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /ZI /GZ /c 
+CPP_PROJ=/nologo /MLd /Gt0 /W3 /GX /Od /D "WIN32" /D "_DEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fp"$(INTDIR)\16Edit-MIPS.pch" /YX /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /ZI /GZ /c 
 
 .c{$(INTDIR)}.obj:
    $(CPP) $(CPP_PROJ) $<  
@@ -191,7 +191,7 @@ CPP_PROJ=/nologo /MLd /Ap64 /DWIN64 /W3 /GX /Od /D "WIN32" /D "_DEBUG" /D "_WIND
 RSC=rc.exe
 RSC_PROJ=/l 0x407 /fo"$(INTDIR)\rsrc.res" /d "_DEBUG" 
 BSC32=bscmake.exe
-BSC32_FLAGS=/nologo /o"$(OUTDIR)\16Edit-AXP64.bsc" 
+BSC32_FLAGS=/nologo /o"$(OUTDIR)\16Edit-MIPS.bsc" 
 BSC32_SBRS= \
 	"$(INTDIR)\16EditLoader.sbr" \
 	"$(INTDIR)\Common.sbr" \
@@ -203,13 +203,13 @@ BSC32_SBRS= \
 	"$(INTDIR)\OFN.sbr" \
 	"$(INTDIR)\WideChar.sbr"
 
-"$(OUTDIR)\16Edit-AXP64.bsc" : "$(OUTDIR)" $(BSC32_SBRS)
+"$(OUTDIR)\16Edit-MIPS.bsc" : "$(OUTDIR)" $(BSC32_SBRS)
     $(BSC32) @<<
   $(BSC32_FLAGS) $(BSC32_SBRS)
 <<
 
 LINK32=link.exe
-LINK32_FLAGS=kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib COMCTL32.LIB /nologo /subsystem:windows /incremental:yes /pdb:"$(OUTDIR)\16Edit_AXP64.pdb" /debug /machine:ALPHA64 /out:"bin\16Edit_AXP64.exe" /pdbtype:sept 
+LINK32_FLAGS=kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib COMCTL32.LIB /nologo /subsystem:windows /incremental:yes /pdb:"$(OUTDIR)\16Edit_MIPS.pdb" /debug /machine:MIPS /out:"bin\16Edit_MIPS.exe" /pdbtype:sept 
 LINK32_OBJS= \
 	"$(INTDIR)\16EditLoader.obj" \
 	"$(INTDIR)\Common.obj" \
@@ -222,7 +222,7 @@ LINK32_OBJS= \
 	"$(INTDIR)\WideChar.obj" \
 	"$(INTDIR)\rsrc.res"
 
-".\bin\16Edit_AXP64.exe" : "$(OUTDIR)" $(DEF_FILE) $(LINK32_OBJS)
+".\bin\16Edit_MIPS.exe" : "$(OUTDIR)" $(DEF_FILE) $(LINK32_OBJS)
     $(LINK32) @<<
   $(LINK32_FLAGS) $(LINK32_OBJS)
 <<
@@ -231,10 +231,10 @@ LINK32_OBJS= \
 
 
 !IF "$(NO_EXTERNAL_DEPS)" != "1"
-!IF EXISTS("16Edit-AXP64.dep")
-!INCLUDE "16Edit-AXP64.dep"
+!IF EXISTS("16Edit-MIPS.dep")
+!INCLUDE "16Edit-MIPS.dep"
 !ELSE 
-!MESSAGE Warning: cannot find "16Edit-AXP64.dep"
+!MESSAGE Warning: cannot find "16Edit-MIPS.dep"
 !ENDIF 
 !ENDIF 
 
