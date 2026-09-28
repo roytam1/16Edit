@@ -270,77 +270,191 @@ BOOL HexStrToInt64(char *szHexStr, ULONGLONG *pqwHexVal)
 }
 
 /*
+ * PE helpers below parse the on-disk headers explicitly (fixed offsets +
+ * memcpy) instead of IMAGE_NT_HEADERS, which switches between the 32-bit
+ * and 64-bit layout depending on the BUILD architecture. Using it made a
+ * 64-bit 16Edit misread 32-bit PEs (and a 32-bit 16Edit misread 64-bit
+ * PEs), because ImageBase lives at a different offset/size in PE32
+ * (DWORD at opt+28) vs PE32+ (QWORD at opt+24). The magic decides.
+ */
+
+#ifndef IMAGE_NT_OPTIONAL_HDR32_MAGIC
+#define IMAGE_NT_OPTIONAL_HDR32_MAGIC 0x10b
+#endif
+#ifndef IMAGE_NT_OPTIONAL_HDR64_MAGIC
+#define IMAGE_NT_OPTIONAL_HDR64_MAGIC 0x20b
+#endif
+
+// Windows loader supports at most 96 sections; cap the walk so a
+// malformed header can't send us off into garbage.
+#define PE_MAX_SECTIONS 96
+
+static BOOL pe_bad(const void *p, SIZE_T cb) {
+	if (!p || cb == 0)
+		return TRUE;
+	return IsBadReadPtr((CONST VOID*)p, (UINT_PTR)cb) ? TRUE : FALSE;
+}
+
+// Parse NT/file header location + section count. Returns FALSE when the
+// buffer doesn't hold a readable PE header. On success fills lfanew,
+// section count, optional-header size and the section table base.
+static BOOL pe_headers(char *base, LONG *pFanew, WORD *pNsec, WORD *pOptSize, ULONGLONG *pSecBase) {
+	WORD wMagic;
+	LONG lFanew;
+	DWORD dwSig;
+	WORD wNsec, wOptSize;
+
+	if (!base)
+		return FALSE;
+	if (pe_bad(base, 2))
+		return FALSE;
+	memcpy(&wMagic, base, 2); // e_magic at 0
+	if (wMagic != IMAGE_DOS_SIGNATURE)
+		return FALSE;
+	if (pe_bad(base + 0x3C, 4))
+		return FALSE;
+	memcpy(&lFanew, base + 0x3C, 4); // e_lfanew
+	if (lFanew < 0 || lFanew > 0x1000000)
+		return FALSE;
+	// Signature + Machine + NumberOfSections
+	if (pe_bad(base + (SIZE_T)lFanew, 8))
+		return FALSE;
+	memcpy(&dwSig, base + lFanew, 4);
+	if (dwSig != IMAGE_NT_SIGNATURE)
+		return FALSE;
+	memcpy(&wNsec, base + lFanew + 4 + 2, 2);
+	memcpy(&wOptSize, base + lFanew + 4 + 16, 2);
+	if (wNsec > PE_MAX_SECTIONS)
+		return FALSE;
+	if (pFanew)
+		*pFanew = lFanew;
+	if (pNsec)
+		*pNsec = wNsec;
+	if (pOptSize)
+		*pOptSize = wOptSize;
+	if (pSecBase)
+		*pSecBase = (ULONGLONG)lFanew + 4 + sizeof(IMAGE_FILE_HEADER) + (ULONGLONG)wOptSize;
+	return TRUE;
+}
+
+// Read ImageBase per optional-header magic. Returns FALSE on unknown magic
+// or unreadable bytes.
+static BOOL pe_imagebase(char *base, LONG lFanew, ULONGLONG *pBase) {
+	WORD wMagic;
+	ULONGLONG qwOpt = (ULONGLONG)lFanew + 4 + sizeof(IMAGE_FILE_HEADER);
+
+	if (pe_bad(base + (SIZE_T)qwOpt, 2))
+		return FALSE;
+	memcpy(&wMagic, base + (SIZE_T)qwOpt, 2);
+	if (wMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+		DWORD dwBase;
+		if (pe_bad(base + (SIZE_T)(qwOpt + 28), 4))
+			return FALSE;
+		memcpy(&dwBase, base + (SIZE_T)(qwOpt + 28), 4);
+		*pBase = (ULONGLONG)dwBase;
+		return TRUE;
+	} else if (wMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+		ULONGLONG qwBase;
+		if (pe_bad(base + (SIZE_T)(qwOpt + 24), 8))
+			return FALSE;
+		memcpy(&qwBase, base + (SIZE_T)(qwOpt + 24), 8);
+		*pBase = qwBase;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/*
  * Return DWORD
  * 		2 : EXE
  * 		1 : DLL
  * 		0 : NOT PE
+ * (FileHeader layout is identical for PE32/PE32+, so this is
+ * architecture-independent.)
  */
 DWORD file_type(char *base) {
-	IMAGE_DOS_HEADER *dos_head = (IMAGE_DOS_HEADER *)base;
-	IMAGE_NT_HEADERS *header;
-	DWORD type;
+	LONG lFanew;
+	WORD wChars;
 
-	if (dos_head->e_magic != IMAGE_DOS_SIGNATURE) {
+	if (!pe_headers(base, &lFanew, NULL, NULL, NULL))
 		return 0;
-	}
 
-	header = (IMAGE_NT_HEADERS *)((char *)dos_head + dos_head->e_lfanew);
-	if (IsBadReadPtr(header, sizeof(*header))) {
+	// Characteristics follows NumberOfSections/SizeOfOptionalHeader in FileHeader.
+	if (pe_bad(base + (SIZE_T)lFanew + 4 + 18, 2))
 		return 0;
-	}
-	if (header->Signature != IMAGE_NT_SIGNATURE) {
-		return 0;
-	}
+	memcpy(&wChars, base + lFanew + 4 + 18, 2);
 
-	if (header->FileHeader.Characteristics & IMAGE_FILE_DLL) {
-		type = 1;
+	if (wChars & IMAGE_FILE_DLL) {
+		return 1;
 	} else {
-		type = 2;
+		return 2;
 	}
-
-	return type;
 }
 
 #define isin(address,start,length) ((address)>=(start) && (address)<(start)+(length))
 /*
- * Get the vitual offset from file offset (64-bit for files >4GB)
+ * Get the vitual offset from file offset (64-bit for files >4GB).
+ * ImageBase and section walks follow the on-disk magic, so 32-bit and
+ * 64-bit PEs translate correctly regardless of the 16Edit build.
  */
 ULONGLONG get_va(char *base, ULONGLONG file_offset) {
-	IMAGE_DOS_HEADER *dos_head = (IMAGE_DOS_HEADER *)base;
-	IMAGE_NT_HEADERS *header;
-	IMAGE_SECTION_HEADER *section_header;
-	int   sect;
+	LONG lFanew;
+	WORD wNsec;
+	ULONGLONG qwImageBase, qwSecBase;
+	WORD sect;
 
-	header = (IMAGE_NT_HEADERS *)((char *)dos_head + dos_head->e_lfanew);
-	for (sect = 0, section_header = (IMAGE_SECTION_HEADER *)
-		((char *)header + header->FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4); 
-		sect < header->FileHeader.NumberOfSections; sect++, section_header++) {
-		if (isin(file_offset, section_header->PointerToRawData, section_header->SizeOfRawData)) {
-			return (ULONGLONG)section_header->VirtualAddress + 
-				file_offset - (ULONGLONG)section_header->PointerToRawData + header->OptionalHeader.ImageBase;
+	if (!pe_headers(base, &lFanew, &wNsec, NULL, &qwSecBase))
+		return file_offset;
+	if (!pe_imagebase(base, lFanew, &qwImageBase))
+		return file_offset;
+
+	for (sect = 0; sect < wNsec; sect++) {
+		ULONGLONG qwEnt = qwSecBase + (ULONGLONG)sect * 40;
+		DWORD dwVA, dwRaw, dwRawSize;
+
+		if (pe_bad(base + (SIZE_T)qwEnt, 40))
+			break;
+		memcpy(&dwVA, base + (SIZE_T)(qwEnt + 12), 4);      // VirtualAddress
+		memcpy(&dwRawSize, base + (SIZE_T)(qwEnt + 16), 4); // SizeOfRawData
+		memcpy(&dwRaw, base + (SIZE_T)(qwEnt + 20), 4);     // PointerToRawData
+		if (isin(file_offset, (ULONGLONG)dwRaw, (ULONGLONG)dwRawSize)) {
+			return (ULONGLONG)dwVA +
+				file_offset - (ULONGLONG)dwRaw + qwImageBase;
 		}
 	}
 	return file_offset;
 }
 
 /*
- * Get the file offset from vitual offset (64-bit for files >4GB)
+ * Get the file offset from vitual offset (64-bit for files >4GB).
+ * ImageBase and section walks follow the on-disk magic, so 32-bit and
+ * 64-bit PEs translate correctly regardless of the 16Edit build.
  */
 ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
-	IMAGE_DOS_HEADER *dos_head = (IMAGE_DOS_HEADER *)base;
-	IMAGE_NT_HEADERS *header;
-	IMAGE_SECTION_HEADER *section_header;
-	int   sect;
+	LONG lFanew;
+	WORD wNsec;
+	ULONGLONG qwImageBase, qwSecBase;
 	ULONGLONG	va;
+	WORD sect;
 
-	header = (IMAGE_NT_HEADERS *)((char *)dos_head + dos_head->e_lfanew);
-	va = va_offset - header->OptionalHeader.ImageBase;
+	if (!pe_headers(base, &lFanew, &wNsec, NULL, &qwSecBase))
+		return va_offset;
+	if (!pe_imagebase(base, lFanew, &qwImageBase))
+		return va_offset;
 
-	for (sect = 0, section_header = (IMAGE_SECTION_HEADER *)
-		((char *)header + header->FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4); 
-		sect < header->FileHeader.NumberOfSections; sect++, section_header++) {
-		if (isin(va, section_header->VirtualAddress, section_header->SizeOfRawData)) {
-			return (ULONGLONG)section_header->PointerToRawData + va - (ULONGLONG)section_header->VirtualAddress;
+	va = va_offset - qwImageBase;
+
+	for (sect = 0; sect < wNsec; sect++) {
+		ULONGLONG qwEnt = qwSecBase + (ULONGLONG)sect * 40;
+		DWORD dwVA, dwRaw, dwRawSize;
+
+		if (pe_bad(base + (SIZE_T)qwEnt, 40))
+			break;
+		memcpy(&dwVA, base + (SIZE_T)(qwEnt + 12), 4);      // VirtualAddress
+		memcpy(&dwRawSize, base + (SIZE_T)(qwEnt + 16), 4); // SizeOfRawData
+		memcpy(&dwRaw, base + (SIZE_T)(qwEnt + 20), 4);     // PointerToRawData
+		if (isin(va, (ULONGLONG)dwVA, (ULONGLONG)dwRawSize)) {
+			return (ULONGLONG)dwRaw + va - (ULONGLONG)dwVA;
 		}
 	}
 	return va_offset;
