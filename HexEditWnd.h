@@ -260,6 +260,7 @@ public:
 	BOOL          SetTopLine();
 	BOOL          SetSelection(ULONGLONG qwOffStart, ULONGLONG qwOffEnd);
 	void          HEHandleWM_CLOSE(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	void          HEHandleWM_DESTROY(HWND hWnd);
 	BOOL          SetHEWnd2Top(BOOL bTop);
 	BOOL          HandleStartCaretPosSel(HWND hWnd);
 	BOOL          HEditToTray();

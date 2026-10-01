@@ -117,6 +117,10 @@ LRESULT FUNC_CALLBACK HEditWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		HEdit.HEHandleWM_CLOSE(hWnd, uMsg, wParam, lParam);
 		break;
 
+	case WM_DESTROY:
+		HEdit.HEHandleWM_DESTROY(hWnd);
+		break;
+
 	case WM_PAINT:
 		HEdit.PaintText(hWnd);
 		break;

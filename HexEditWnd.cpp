@@ -170,6 +170,7 @@ HexEditWnd::HexEditWnd() {
 
 	cf16Edit = RegisterClipboardFormat(CF_16Edit);
 
+	ZERO(nidTray);
 	hmTray = CreatePopupMenu();
 	AppendMenu(hmTray, MF_STRING, IDT_RESTORE, "&Restore");
 	AppendMenu(hmTray, MF_STRING, IDT_EXIT, "E&xit");
@@ -177,10 +178,19 @@ HexEditWnd::HexEditWnd() {
 
 HexEditWnd::~HexEditWnd() {
 	ClosePaged();
-	DeleteObject(hFont);
-	DeleteObject(hFontU);
+	if (hFont) {
+		DeleteObject(hFont);
+		hFont = NULL;
+	}
+	if (hFontU) {
+		DeleteObject(hFontU);
+		hFontU = NULL;
+	}
 
-	DestroyMenu(hmTray);
+	if (hmTray) {
+		DestroyMenu(hmTray);
+		hmTray = NULL;
+	}
 }
 
 void HexEditWnd::InitEdition() {
@@ -228,9 +238,9 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 	WNDCLASS               wc;
 	MSG                    msg;
 	UINT                   icx, icy, ix, iy;
-	HWND                   hWnd, hTB;
+	HWND                   hWnd = NULL, hTB = NULL;
 	RECT                   rct;
-	HACCEL                 hAccel;
+	HACCEL                 hAccel = NULL;
 	HE_WIN_POS             wp;
 
 	InitCommonControls();
@@ -269,27 +279,31 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 
 	HEdit.hMainWnd = hWnd;
 
-	hTB = CreateToolbarEx(
-		 hWnd,
-		 WS_CHILD | WS_VISIBLE | TBSTYLE_TOOLTIPS | TBSTYLE_FLAT,
-		 ID_TB,
-		 50, // number of buttons in the bitmap
-		 NULL,
-		 (UINT_PTR)LoadBitmap(HEdit.GetInstance(), (PSTR)IDB_TOOLBAR),
-		 (LPTBBUTTON)&TBbs,
-		 ARRAY_ITEMS(TBbs),
-		 16,
-		 16,
-		 16,
-		 16,
-		 sizeof(TBBUTTON));
-	HEdit.SetTBHandle(hTB);
-	pOrgTBWndProc = (WNDPROC)SetWindowLongPtr(hTB, GWLP_WNDPROC, (LONG_PTR)TBHookProc);
+	if (hWnd) {
+		hTB = CreateToolbarEx(
+			 hWnd,
+			 WS_CHILD | WS_VISIBLE | TBSTYLE_TOOLTIPS | TBSTYLE_FLAT,
+			 ID_TB,
+			 50, // number of buttons in the bitmap
+			 NULL,
+			 (UINT_PTR)LoadBitmap(HEdit.GetInstance(), (PSTR)IDB_TOOLBAR),
+			 (LPTBBUTTON)&TBbs,
+			 ARRAY_ITEMS(TBbs),
+			 16,
+			 16,
+			 16,
+			 16,
+			 sizeof(TBBUTTON));
+		HEdit.SetTBHandle(hTB);
+		if (hTB) {
+			pOrgTBWndProc = (WNDPROC)SetWindowLongPtr(hTB, GWLP_WNDPROC, (LONG_PTR)TBHookProc);
 
-	GetClientRect(hTB, &rct);
-	HEdit.iyHETop = rct.bottom - rct.top + 2;
+			GetClientRect(hTB, &rct);
+			HEdit.iyHETop = rct.bottom - rct.top + 2;
+		}
 
-	hAccel = LoadAccelerators(HEdit.GetInstance(), (PSTR)IDR_ACCEL);
+		hAccel = LoadAccelerators(HEdit.GetInstance(), (PSTR)IDR_ACCEL);
+	}
 
 	bRightClickMenu = FALSE;
 	iFileCDMode = 0;
@@ -297,16 +311,28 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 	GetPrivateProfileStruct(INI_SECTION, INI_FILECD, &iFileCDMode, sizeof(int), HEdit.cIniPath);
 
 	GetPrivateProfileStruct(INI_SECTION, INI_WINPOSKEY, &wp, sizeof(wp), HEdit.cIniPath);
-	MoveWindow( hWnd, wp.ix, wp.iy, wp.icx, wp.icy, TRUE);
-	ShowWindow( hWnd, SW_SHOWNORMAL);
-	UpdateWindow(hWnd);
+	if (hWnd) {
+		MoveWindow( hWnd, wp.ix, wp.iy, wp.icx, wp.icy, TRUE);
+		ShowWindow( hWnd, SW_SHOWNORMAL);
+		UpdateWindow(hWnd);
 
-	while (GetMessage(&msg, NULL, 0, 0)) {
-		if (!TranslateAccelerator(hWnd, hAccel, &msg)) {
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
+		while (GetMessage(&msg, NULL, 0, 0)) {
+			if (!TranslateAccelerator(hWnd, hAccel, &msg)) {
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
 		}
 	}
+
+	// Win32s: tear everything down in 32-bit context before the
+	// CRT runs globals/ExitProcess (fonts/menu are freed by ~HEdit
+	// after the HWNDs are gone, which is the safe order).
+	if (hAccel) {
+		DestroyAcceleratorTable(hAccel);
+		hAccel = NULL;
+	}
+	UnregisterClass(HEDIT_WND_CLASS, HEdit.GetInstance());
+	UnregisterClass(HEDIT_CLASS, HEdit.GetInstance());
 
 	return 0;
 }
@@ -4426,6 +4452,38 @@ void HexEditWnd::HEHandleWM_CLOSE(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 		WritePrivateProfileStruct(INI_SECTION, INI_WINPOSKEY, &wp, sizeof(wp), cIniPath);
 	}
 
+	// Win32s: windows must be destroyed (and subclasses removed)
+	// before ExitProcess, or teardown GP-faults. PostQuitMessage
+	// alone leaves HWNDs alive.
+	if (hTB && pOrgTBWndProc) {
+		SetWindowLongPtr(hTB, GWLP_WNDPROC, (LONG_PTR)pOrgTBWndProc);
+		pOrgTBWndProc = NULL;
+	}
+	DestroyWindow(hWnd ? hWnd : hMainWnd);
+	return;
+}
+
+void HexEditWnd::HEHandleWM_DESTROY(HWND hWnd)
+{
+	HWND hKill = hWnd ? hWnd : hMainWnd;
+
+	// Safety net if WM_DESTROY arrives without WM_CLOSE
+	// (subclass is already gone once the child is destroyed;
+	// IsWindow guards the dead-handle case).
+	if (hTB && pOrgTBWndProc && IsWindow(hTB)) {
+		SetWindowLongPtr(hTB, GWLP_WNDPROC, (LONG_PTR)pOrgTBWndProc);
+		pOrgTBWndProc = NULL;
+	}
+	if (timerId && hKill) {
+		KillTimer(hKill, SELECT_TIMER);
+		timerId = 0;
+	}
+	if (nidTray.hWnd) {
+		HEditKillTrayIcon();
+		nidTray.hWnd = NULL;
+	}
+	hTB = NULL;
+	hMainWnd = NULL;
 	PostQuitMessage(0);
 	return;
 }
