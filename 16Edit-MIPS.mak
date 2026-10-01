@@ -66,7 +66,7 @@ CLEAN :
 MTL=midl.exe
 MTL_PROJ=/nologo /D "NDEBUG" /mktyplib203 /win32 
 CPP=cl.exe
-CPP_PROJ=/nologo /MD /Gt0 /W3 /GX /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /O1 /c 
+CPP_PROJ=/nologo /ML /Gt0 /W3 /GX /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_MBCS" /FR"$(INTDIR)\\" /Fo"$(INTDIR)\\" /Fd"$(INTDIR)\\" /O1 /c 
 
 .c{$(INTDIR)}.obj:
    $(CPP) $(CPP_PROJ) $<  
