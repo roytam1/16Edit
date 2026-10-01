@@ -254,7 +254,7 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 	wp.ix = ix = (GetSystemMetrics(SM_CXFULLSCREEN) - icx) / 2;
 	wp.iy = iy = (GetSystemMetrics(SM_CYFULLSCREEN) - icy) / 2;
 
-	hWnd = CreateWindow(
+	hWnd = CreateWindowEx(WS_EX_ACCEPTFILES,
 		   HEDIT_WND_CLASS,
 		   HEDIT_WND_TITLE,
 		   WS_OVERLAPPEDWINDOW,
@@ -268,7 +268,6 @@ DWORD FUNC_CALLBACK HEditWindowThread() {
 		   NULL);
 
 	HEdit.hMainWnd = hWnd;
-	DragAcceptFiles(hWnd, TRUE);
 
 	hTB = CreateToolbarEx(
 		 hWnd,
