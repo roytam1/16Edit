@@ -4613,38 +4613,32 @@ void HexEditWnd::SetStatusText() {
 }
 
 void HexEditWnd::ShowAbout() {
-	MSGBOXPARAMS args;
-
-	ZERO(args);
-	args.cbSize         = sizeof( args );
-	args.hwndOwner      = hMainWnd;
-	args.dwStyle        = MB_USERICON;
-	args.hInstance      = GetInstance();
-	args.lpszIcon       = (PSTR)IDI_16Edit;
-	args.lpszCaption    = "About";
-	args.lpszText       = "16Edit 1.04+ - HexEditor by slangmgh\n"\
-						  "Created from yoda's 16Edit module\n\n"\
-						  "Changelog 1.04+:\n"
-						  "1. Copy text available in clipboard\n"
-						  "2. Goto offset save in profile\n"
-						  "3. Search/Replace text enable paste\n"
-						  "4. Search/Replace text save in profile\n"
-						  "5. Add [F5] for reloading file\n"
-						  "6. Some small bugfix\n\n"
-						  "Feature:\n"\
-						  "1. Small/Green/Robust/Freeware\n"\
-						  "2. Unlimited undo/redo\n"\
-						  "3. Ascii/Ansi display switch\n"\
-						  "4. Add/Modify/Add&Modify color indicator\n"\
-						  "5. Size lock\n"\
-						  "6. Shell integration\n"\
-						  "7. Paste insert/overwrite mode\n"\
-						  "8. Readonly/Readwrite mode\n"\
-						  "9. File offset/Virtual address mode\n"\
-						  "10. Ascii/Unicode/Binary search/replace\n"\
-						  "11. You requesting...\n\n"\
-						  "slangmgh@netease.com";
-	MessageBoxIndirect( &args );
+	// NOTE: MessageBoxIndirect/MSGBOXPARAMS is not implemented on
+	// Win32s (returns 0, no box), so use plain MessageBox here.
+	MessageBox(hMainWnd,
+		"16Edit 1.04+ - HexEditor by slangmgh\n"\
+		"Created from yoda's 16Edit module\n\n"\
+		"Changelog 1.04+:\n"
+		"1. Copy text available in clipboard\n"
+		"2. Goto offset save in profile\n"
+		"3. Search/Replace text enable paste\n"
+		"4. Search/Replace text save in profile\n"
+		"5. Add [F5] for reloading file\n"
+		"6. Some small bugfix\n\n"
+		"Feature:\n"\
+		"1. Small/Green/Robust/Freeware\n"\
+		"2. Unlimited undo/redo\n"\
+		"3. Ascii/Ansi display switch\n"\
+		"4. Add/Modify/Add&Modify color indicator\n"\
+		"5. Size lock\n"\
+		"6. Shell integration\n"\
+		"7. Paste insert/overwrite mode\n"\
+		"8. Readonly/Readwrite mode\n"\
+		"9. File offset/Virtual address mode\n"\
+		"10. Ascii/Unicode/Binary search/replace\n"\
+		"11. You requesting...\n\n"\
+		"slangmgh@netease.com",
+		"About", MB_OK | MB_ICONINFORMATION);
 
 	return;
 }
