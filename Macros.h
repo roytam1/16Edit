@@ -27,7 +27,7 @@
 #endif
 #endif
 #if !defined(_WIN64)
-#if _MSC_VER < 1300
+#if (_MSC_VER < 1300) || defined(OLDSDK)
 #ifndef LONG_PTR
 #define LONG_PTR LONG
 #endif
@@ -43,7 +43,7 @@
 #ifndef DWORD_PTR
 #define DWORD_PTR DWORD
 #endif
-#if _MSC_VER < 1200
+#if (_MSC_VER < 1200) || defined(OLDSDK)
 typedef ULONG_PTR SIZE_T, *PSIZE_T;
 typedef LONG_PTR SSIZE_T, *PSSIZE_T;
 typedef __int64 LONGLONG;
@@ -53,7 +53,7 @@ typedef unsigned __int64 ULONGLONG;
 LONGLONG _atoi64 (const char * nptr);
 #endif
 #endif
-#if _MSC_VER < 1300
+#if (_MSC_VER < 1300) || defined(OLDSDK)
 #ifndef SetWindowLongPtr
 #define SetWindowLongPtr SetWindowLong
 #endif

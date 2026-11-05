@@ -145,7 +145,7 @@ HexEditWnd::HexEditWnd() {
 	GetModuleFileName( hInst, cInitialDir, sizeof(cInitialDir) );
 	CPathString::PathToDir( cInitialDir );
 	CPathString::ForceEndBackslash( cInitialDir);
-	wsprintf(cIniPath, "%s"INI_NAME, cInitialDir);
+	wsprintf(cIniPath, "%s" INI_NAME, cInitialDir);
 
 	fontHeight = GetPrivateProfileInt(INI_SECTION, "fh", 0, cIniPath);
 	fontQuality = GetPrivateProfileInt(INI_SECTION, "fq", 0, cIniPath);

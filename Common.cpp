@@ -536,7 +536,7 @@ ULONGLONG get_fo(char *base, ULONGLONG va_offset) {
 	return va_offset;
 }
 
-#if _MSC_VER < 1200
+#if (_MSC_VER < 1200) || defined(OLDSDK)
 LONGLONG _atoi64 (const char * nptr) {
   char *s = (char *)nptr;
   LONGLONG acc = 0;
